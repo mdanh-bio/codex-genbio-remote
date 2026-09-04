@@ -1,0 +1,11 @@
+policyPath: /absolute/path/to/genbio-compute-policy.yaml
+dataRoot: /absolute/path/to/codex-genbio-state
+projectsDir: /absolute/path/to/genbio-projects
+workspaceRoot: /absolute/path/to/current-workspace
+remoteReadEnabled: false
+commandTimeoutMs: 30000
+rcloneRemote:
+  HPC: your-hpc-rclone-remote
+  NHPC: your-nhpc-rclone-remote
+  genbioh100: your-h100-rclone-remote
+  genbio_mdanh: your-direct-rclone-remote

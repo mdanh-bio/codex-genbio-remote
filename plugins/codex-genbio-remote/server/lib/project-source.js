@@ -19,7 +19,7 @@ function inside(root, candidate) {
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 function workspacePathOf(exec) {
-  const cwd = exec?.agent?.session?.header?.cwd;
+  const cwd = typeof exec === "string" ? exec : exec?.workspaceRoot ?? exec?.agent?.session?.header?.cwd;
   return typeof cwd === "string" && cwd.length > 0 ? cwd : null;
 }
 async function canonicalWorkspace(exec) {

@@ -10,11 +10,12 @@
     "node": ">=22"
   },
   "scripts": {
-    "check:syntax": "node --check lib/*.js",
+    "check:syntax": "node --check lib/*.js && node --check mcp/*.js && node --check bin/*.js",
     "test": "node --test tests/*.test.mjs",
     "check": "npm run check:syntax && npm test"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
     "js-yaml": "^4.1.0",
     "zod": "^3.24.0"
   }
