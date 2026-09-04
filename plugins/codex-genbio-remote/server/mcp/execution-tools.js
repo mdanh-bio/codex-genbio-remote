@@ -38,6 +38,7 @@ export function registerExecutionTools(server, context) {
   const captured = new Map();
   const makeTool = (name, description, parameters, execute) => { const tool = { name, description, parameters, execute }; captured.set(name, tool); return tool; };
   createProjectTools({ makeTool, requirePolicy, requireState, publicState, config: context.config, runRemote, shell, userQuestions, jobs, requireRemoteAccess, projectSource, executionRegistry });
+  context.execution = { owners, captured, execFor, publicState, requirePolicy, requireState, projectSource };
   const wrappedTool = (tool, inputSchema, annotations) => server.registerTool(tool.name, { description: tool.description, inputSchema: { owner_handle: HANDLE, ...inputSchema }, annotations }, async ({ owner_handle, ...args }) => {
     const loaded = await context.getPolicy(); context.activePolicy = loaded;
     const state = await owners.load(owner_handle);

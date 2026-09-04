@@ -17,3 +17,4 @@ export * from "./slurm-policy.js";
 export * from "./transfer.js";
 export * from "./workflow-registry.js";
 export * from "./workflow.js";
+export * from "./workflow-tools.js";
