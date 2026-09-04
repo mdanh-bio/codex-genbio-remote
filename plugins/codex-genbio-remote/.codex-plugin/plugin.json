@@ -1,0 +1,18 @@
+{
+  "name": "codex-genbio-remote",
+  "version": "0.1.0",
+  "description": "Policy-guided Genbio remote compute workflows for Codex.",
+  "author": {
+    "name": "mdanh-bio"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex Genbio Remote",
+    "shortDescription": "Operate approved Genbio compute targets under explicit safety policy.",
+    "longDescription": "Provides policy-guided Genbio workflows and a staged path to constrained Codex MCP tools.",
+    "developerName": "mdanh-bio",
+    "category": "Developer Tools",
+    "capabilities": ["Remote compute policy", "Slurm workflow guidance"],
+    "defaultPrompt": ["Inspect the Genbio policy and prepare an approval-gated remote operation plan."]
+  }
+}
