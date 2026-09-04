@@ -552,7 +552,7 @@ export function createH100DirectTools({ makeTool, requirePolicy, requireState, p
       run.error = reconciled === "failed" ? (stderrTail || `exit ${exitCode ?? exitMarker}`) : null;
       // Native runs release their volatile pair-lock; recovered runs remain an
       // ephemeral view and update only their original durable registry row.
-      if (run.pairKey && !run.recovered) { const inFlight = state.h100DirectInFlight; if (inFlight) inFlight.delete(run.pairKey); }
+      if (run.pairKey && !run.recovered) { const inFlight = state.h100DirectInFlight; if (inFlight instanceof Map) inFlight.delete(run.pairKey); }
       if (runRegistry && run.registryRunId) {
         try { await runRegistry.update(run.registrySessionId ?? sessionId, run.registryRunId, { status: reconciled, note: `genbioh100 direct reconciled ${reconciled}` }); }
         catch (regErr) { run.registryError = `terminal registry update failed: ${String(regErr?.message ?? regErr)}`; }
