@@ -1,13 +1,11 @@
 # Codex Genbio Remote
 
-Private Codex plugin for policy-controlled operation of approved Genbio Slurm
-clusters and direct compute hosts.
+Repository-local marketplace for the private Codex Genbio Remote plugin.
 
 ## Current status
 
-Version `0.1.0` is a skills-first bootstrap. It packages the existing
-`operate-genbio-hpc-remote` policy skill and its deterministic validators. It
-does not yet register remote execution tools or replace the DSH runtime.
+The marketplace currently packages the skills-first `0.1.0` bootstrap. The
+migration source is installed `dsh-genbio-remote` version `0.4.0`.
 
 Remote actions remain subject to explicit user approval, strict OpenSSH host
 verification, target-specific resource envelopes, and fresh scheduler or
@@ -29,21 +27,17 @@ or raw scheduler arguments.
 ## Repository layout
 
 ```text
-.codex-plugin/plugin.json       Codex plugin manifest
-skills/                         Policy and workflow instructions
-scripts/                        Repository maintenance helpers
-docs/ARCHITECTURE.md            Target design and trust boundaries
-docs/CONVERSION_PLAN.md         Staged DSH-to-Codex migration
-SECURITY.md                     Non-negotiable safety properties
+.agents/plugins/marketplace.json       Repository marketplace
+plugins/codex-genbio-remote/           Installable plugin root
 ```
 
 ## Validation
 
 ```bash
-python3 skills/operate-genbio-hpc-remote/scripts/load_policy.py \
-  skills/operate-genbio-hpc-remote/references/genbio-compute-policy.yaml
+python3 plugins/codex-genbio-remote/skills/operate-genbio-hpc-remote/scripts/load_policy.py \
+  plugins/codex-genbio-remote/skills/operate-genbio-hpc-remote/references/genbio-compute-policy.yaml
 python3 -m unittest discover \
-  -s skills/operate-genbio-hpc-remote/tests -p 'test_*.py'
+  -s plugins/codex-genbio-remote/skills/operate-genbio-hpc-remote/tests -p 'test_*.py'
 ```
 
 Plugin-level validation uses the installed Codex `plugin-creator` validator.
