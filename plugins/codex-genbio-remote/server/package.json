@@ -1,6 +1,6 @@
 {
   "name": "@mdanh-bio/codex-genbio-remote-server",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "description": "Provider-neutral core for the Codex Genbio Remote MCP server.",
   "private": true,
   "license": "MIT",
