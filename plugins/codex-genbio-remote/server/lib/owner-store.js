@@ -17,7 +17,7 @@ export function createOwnerStore(dataRoot, workspaceRoot) {
   }
   async function persist(state) {
     await mkdir(root, { recursive: true });
-    const text = `${JSON.stringify(state, null, 2)}\n`;
+    const text = `${JSON.stringify(state, (_key, value) => value instanceof Map || value instanceof Set ? undefined : value, 2)}\n`;
     if (Buffer.byteLength(text) > MAX_BYTES) throw new Error("owner state exceeds persistence limit");
     const tmp = `${fileFor(state.ownerHandle)}.tmp-${randomBytes(6).toString("hex")}`;
     await writeFile(tmp, text, { encoding: "utf8", mode: 0o600 });

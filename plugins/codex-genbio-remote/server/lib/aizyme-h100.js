@@ -531,7 +531,7 @@ export function createAizymeH100Tools({ makeTool, requirePolicy, requireState, p
           run.status = reconciled;
           run.lockReleased = true;
           const inFlightH100 = state.aizymeH100InFlight;
-          if (inFlightH100) inFlightH100.delete("stage2");
+          if (inFlightH100 instanceof Set) inFlightH100.delete("stage2");
           if (runRegistry && run.registryRunId) {
             try {
               await runRegistry.update(sessionId, run.registryRunId, { status: reconciled, note: `H100 stage2 reconciled ${reconciled}` });
