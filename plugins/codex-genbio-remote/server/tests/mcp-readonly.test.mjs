@@ -62,3 +62,44 @@ test("owner handles are workspace-bound and enforce resource envelopes", async (
   const unknown = await client.callTool({ name: "genbio_validate_resources", arguments: { owner_handle: "own_00000000000000000000000000000000", cpus: 1, gpus: 0, concurrency: 1 } });
   assert.equal(unknown.isError, true);
 });
+
+test("H100 MCP tools expose owner-bound schemas and behavior-accurate annotations", async (t) => {
+  const { client } = await harness(t);
+  const listed = await client.listTools();
+  const expected = [
+    "genbio_aizyme_h100_stage2",
+    "genbio_aizyme_h100_status",
+    "genbio_aizyme_h100_prepare",
+    "genbio_aizyme_h100_prepare_status",
+    "genbio_h100_direct_stage",
+    "genbio_h100_direct_job",
+    "genbio_h100_direct_status",
+    "genbio_h100_direct_fetch",
+    "genbio_h100_mirror_plan",
+    "genbio_h100_mirror_execute",
+    "genbio_h100_mirror_status",
+  ];
+  for (const name of expected) {
+    const tool = listed.tools.find((item) => item.name === name);
+    assert.ok(tool, name);
+    assert.ok(tool.inputSchema.required.includes("owner_handle"), `${name} must require owner_handle`);
+    assert.equal(tool.annotations.openWorldHint, true, `${name} may inspect or mutate remote state`);
+    assert.equal(tool.annotations.destructiveHint, false, `${name} has no broad destructive surface`);
+  }
+  assert.equal(listed.tools.find((item) => item.name === "genbio_h100_mirror_status").annotations.readOnlyHint, true);
+  for (const name of ["genbio_aizyme_h100_status", "genbio_aizyme_h100_prepare_status", "genbio_h100_direct_status"]) {
+    assert.equal(listed.tools.find((item) => item.name === name).annotations.readOnlyHint, false, `${name} can reconcile durable state`);
+  }
+});
+
+test("H100 tools fail closed before remote access when external manifests are absent", async (t) => {
+  const { client } = await harness(t);
+  const created = await client.callTool({ name: "genbio_set_envelope", arguments: { target: "genbioh100", node: "genbioh100", workload_class: "cpu", max_cpus: 1, max_gpus: 0, mem_gb: 1, concurrency: 1, acknowledge_restrictions: true } });
+  const ownerHandle = created.structuredContent.owner_handle;
+  const direct = await client.callTool({ name: "genbio_h100_direct_stage", arguments: { owner_handle: ownerHandle, project: "missing" } });
+  assert.equal(direct.isError, true);
+  assert.match(direct.content[0].text, /h100DirectProjectsDir is not configured/u);
+  const mirror = await client.callTool({ name: "genbio_h100_mirror_status", arguments: { owner_handle: ownerHandle } });
+  assert.equal(mirror.isError, true);
+  assert.match(mirror.content[0].text, /h100MirrorManifestPath is not configured/u);
+});

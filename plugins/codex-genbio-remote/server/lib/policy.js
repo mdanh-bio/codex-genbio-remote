@@ -17,6 +17,7 @@ export function validatePolicy(policy) {
   const h100 = policy.targets.genbioh100;
   if (h100?.ssh_target !== "genbioh100" || h100?.surface !== "direct" || JSON.stringify(h100?.limits?.gpus_allowed) !== "[0]") throw new Error("genbioh100 policy is invalid");
   if (h100.hardware?.reserved_gpu !== 1 || h100.hardware?.protected_process !== "gpu_util") throw new Error("genbioh100 GPU 1 protection is required");
+  if (h100.limits.concurrent_cpu_jobs !== undefined && (!Number.isInteger(h100.limits.concurrent_cpu_jobs) || h100.limits.concurrent_cpu_jobs < 1)) throw new Error("genbioh100 concurrent_cpu_jobs must be a positive integer");
   if (policy.targets.genbio_mdanh?.ssh_target !== "genbio_mdanh" || policy.targets.genbio_mdanh?.surface !== "direct") throw new Error("genbio_mdanh policy is invalid");
   return policy;
 }

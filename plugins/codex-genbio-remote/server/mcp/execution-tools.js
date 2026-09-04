@@ -5,6 +5,8 @@ import { createProjectSource } from "../lib/project-source.js";
 import { createJobRegistry, createQuestionAdapter, createRemoteRunner, createShellAdapter } from "../lib/runtime-adapters.js";
 import { createProjectTools } from "../lib/project-tools.js";
 import { TARGETS } from "../lib/policy.js";
+import { createRunRegistry } from "../lib/run-registry.js";
+import { genbioh100ConcurrencyCap } from "../lib/slurm-policy.js";
 import { result } from "./results.js";
 
 const WRITE = Object.freeze({ readOnlyHint: false, destructiveHint: false, openWorldHint: true });
@@ -22,6 +24,7 @@ export function registerExecutionTools(server, context) {
   const runRemote = createRemoteRunner();
   const userQuestions = createQuestionAdapter(server);
   const executionRegistry = createExecutionRegistry(context.config.executionRegistryDir);
+  const runRegistry = createRunRegistry(context.config.runRegistryDir);
   const projectSource = createProjectSource(context.config);
   const publicState = (state) => ({ policy: state.policy, envelope: state.envelope, runs: state.runs, submissions: state.submissions, allocations: state.allocations, remoteGrants: state.remoteGrants });
   const requirePolicy = () => { if (!context.activePolicy) throw new Error("policy is not loaded"); return context.activePolicy.policy; };
@@ -38,7 +41,7 @@ export function registerExecutionTools(server, context) {
   const captured = new Map();
   const makeTool = (name, description, parameters, execute) => { const tool = { name, description, parameters, execute }; captured.set(name, tool); return tool; };
   createProjectTools({ makeTool, requirePolicy, requireState, publicState, config: context.config, runRemote, shell, userQuestions, jobs, requireRemoteAccess, projectSource, executionRegistry });
-  context.execution = { owners, captured, execFor, publicState, requirePolicy, requireState, projectSource };
+  context.execution = { owners, captured, execFor, publicState, requirePolicy, requireState, projectSource, runRemote, shell, userQuestions, jobs, requireRemoteAccess, runRegistry };
   const wrappedTool = (tool, inputSchema, annotations) => server.registerTool(tool.name, { description: tool.description, inputSchema: { owner_handle: HANDLE, ...inputSchema }, annotations }, async ({ owner_handle, ...args }) => {
     const loaded = await context.getPolicy(); context.activePolicy = loaded;
     const state = await owners.load(owner_handle);
@@ -53,7 +56,11 @@ export function registerExecutionTools(server, context) {
     const targetPolicy = loaded.policy.targets[args.target];
     if (["HPC", "NHPC"].includes(args.target) && targetPolicy.allowlist?.[args.node]?.partition !== args.partition) throw new Error("node and partition do not match policy");
     if (!["HPC", "NHPC"].includes(args.target) && args.node !== args.target) throw new Error("direct target node must equal target");
-    if (args.target === "genbioh100" && (args.max_gpus > 1 || args.max_cpus > targetPolicy.limits.cpu_threads_per_job || args.concurrency > (args.max_gpus > 0 ? targetPolicy.limits.concurrent_gpu_jobs : targetPolicy.limits.concurrent_cpu_jobs ?? 1))) throw new Error("genbioh100 envelope exceeds policy");
+    if (args.target === "genbioh100") {
+      const policy = loaded.policy;
+      const classCap = genbioh100ConcurrencyCap(policy, args.max_gpus);
+      if (args.max_gpus > 1 || args.max_cpus > targetPolicy.limits.cpu_threads_per_job || (args.mem_gb !== undefined && args.mem_gb > targetPolicy.limits.mem_gb_per_job) || args.concurrency > classCap) throw new Error("genbioh100 envelope exceeds policy");
+    }
     const envelope = { target: args.target, node: args.node, partition: args.partition ?? null, workloadClass: args.workload_class, maxCpus: args.max_cpus, maxGpus: args.max_gpus, memGb: args.mem_gb ?? null, concurrency: args.concurrency, usedCpus: 0, usedGpus: 0 };
     const state = await owners.create(loaded.hash, envelope);
     return result({ ok: true, owner_handle: state.ownerHandle, envelope }, "Created a workspace-bound Genbio owner handle.");
