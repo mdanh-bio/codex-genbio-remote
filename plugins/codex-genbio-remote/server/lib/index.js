@@ -5,6 +5,7 @@ export * from "./aizyme-h100.js";
 export * from "./atomic-store.js";
 export * from "./execution-registry.js";
 export * from "./execution-core.js";
+export * from "./finalization.js";
 export * from "./h100-direct.js";
 export * from "./h100-mirror.js";
 export * from "./owner-store.js";

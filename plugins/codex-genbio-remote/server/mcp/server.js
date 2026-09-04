@@ -3,6 +3,7 @@ import { loadPolicy } from "../lib/policy.js";
 import { registerReadonlyTools } from "./readonly-tools.js";
 import { registerExecutionTools } from "./execution-tools.js";
 import { registerH100Tools } from "./h100-tools.js";
+import { registerFinalizationTools } from "./finalization-tools.js";
 import { registerWorkflowTools } from "./workflow-tools.js";
 
 export function createGenbioServer(config) {
@@ -13,5 +14,6 @@ export function createGenbioServer(config) {
   registerExecutionTools(server, context);
   registerWorkflowTools(server, context);
   registerH100Tools(server, context);
+  registerFinalizationTools(server, context);
   return server;
 }
