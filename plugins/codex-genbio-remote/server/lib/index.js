@@ -1,8 +1,12 @@
 // codex-genbio-remote core entrypoint (provider-neutral)
 export * from "./aggregate.js";
+export * from "./aizyme-h100-prep.js";
+export * from "./aizyme-h100.js";
 export * from "./atomic-store.js";
 export * from "./execution-registry.js";
 export * from "./execution-core.js";
+export * from "./h100-direct.js";
+export * from "./h100-mirror.js";
 export * from "./owner-store.js";
 export * from "./project-tools.js";
 export * from "./inventory.js";
