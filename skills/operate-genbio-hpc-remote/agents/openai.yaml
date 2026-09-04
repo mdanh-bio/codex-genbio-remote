@@ -1,0 +1,4 @@
+interface:
+  display_name: "Genbio HPC Remote"
+  short_description: "Native OpenSSH Genbio Slurm and workstation operations"
+  default_prompt: "Use $operate-genbio-hpc-remote to operate this Genbio workload safely over native SSH."

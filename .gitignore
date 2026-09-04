@@ -1,0 +1,16 @@
+node_modules/
+dist/
+coverage/
+__pycache__/
+*.py[cod]
+.DS_Store
+.env
+.env.*
+!.env.example
+*.log
+run-registry/
+execution-registry/
+workflow-registry/
+results/
+secrets/
+cordis.patch.yml
