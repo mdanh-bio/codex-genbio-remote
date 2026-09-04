@@ -66,6 +66,14 @@ failure.
 Do not inspect, print, copy, create, or modify private keys, SSH agent state,
 authentication tokens, or SSH configuration without a separate explicit request.
 
+## Slurm reference patterns
+
+The public Slurm skills reviewed for this plugin reinforce a discovery-first workflow and separate CPU, GPU, and array templates. Use `templates/` as policy-safe starting points, then generate a schema-v2 wrapper and validate it with `scripts/validate_sbatch.py`; the templates are not direct submission files.
+
+Before site-specific submission, inspect Slurm version/configuration, partitions, node and GRES inventory, queue pressure, and accounting visibility. Use `squeue` for live state, `scontrol show job` for pending reasons and detailed state, `sstat` only when running metrics are available, and `sacct` for terminal accounting. For arrays, bound concurrency and inspect every element. Capture host, date, job ID, resolved executable paths, GPU visibility, stderr, and deterministic output names in the job-owned evidence.
+
+Genbio-specific policy overrides generic examples: never add account, time, memory, exclusive, multi-node, or resource-changing `srun` directives; never copy site-specific limits; never retry an ambiguous submission; and require scheduler plus job-output evidence before success.
+
 ## Workflow
 
 ### 1. Preflight
