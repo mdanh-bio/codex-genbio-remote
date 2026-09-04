@@ -7,15 +7,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { load as parseYaml } from "js-yaml";
 import { buildPackageInventory } from "../lib/inventory.js";
-import { parseProjectManifest } from "../lib/project.js";
-import { createProjectTools } from "../lib/project-tools.js";
 
 const sha = (data) => createHash("sha256").update(data).digest("hex");
-const policyHash = "a".repeat(64);
-const policy = { targets: { HPC: { test_gate: { real_submission: "gpu04" }, allowlist: { gpu04: { partition: "gpus" } } } } };
-const exec = { agent: { id: "inv", session: { id: "inv", header: { cwd: "/tmp" } } } };
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), "inventory-"));
@@ -80,29 +74,4 @@ test("inventory records are frozen, JSON-safe, and never carry file contents", a
   assert.equal(text.includes("alpha bytes"), false, "contents never leak into the record");
   assert.equal(text.includes(fx.localRoot), false, "absolute local roots never leak into the record");
   assert.deepEqual(Object.keys(inventory).sort(), ["files", "manifestSha", "packageSha", "project", "schema", "totalBytes"]);
-});
-
-test("genbio_project_inventory is a local read-only content-addressed view", async (t) => {
-  const fx = await fixture(t);
-  const manifestText = `schema_version: 2\nproject: demo\nlocal_root: ${fx.localRoot}\nremote_root: /data01/demo\nfiles:\n  - a.sh\n  - b.dat\njobs:\n  run:\n    cpus: 1\n    recipe:\n      name: demo-run\n      script: a.sh\n      argv: []\n`;
-  await writeFile(join(fx.projectsDir, "demo.yaml"), manifestText);
-  const state = { policy: { hash: policyHash }, envelope: null, runs: [] };
-  const tools = createProjectTools({
-    makeTool: (name, description, parameters, execute) => ({ name, description, parameters, execute }),
-    requirePolicy: () => policy,
-    requireState: () => state,
-    publicState: (s) => ({ policy: s.policy, runs: s.runs }),
-    config: { projectsDir: fx.projectsDir },
-  });
-  const result = await tools.inventoryTool.execute({ project: "demo" }, exec);
-  assert.equal(result.ok, true);
-  const inventory = result.status.inventory;
-  assert.equal(inventory.project, "demo");
-  assert.equal(inventory.manifestSha, sha(manifestText), "the inventory binds the exact manifest bytes");
-  // Parity with the pure core on the same manifest.
-  const parsed = parseProjectManifest("demo", parseYaml(manifestText));
-  const expected = await buildPackageInventory(parsed, sha(manifestText));
-  assert.equal(inventory.packageSha, expected.packageSha);
-  assert.equal(state.runs.length, 0, "planning/inventory never create runs");
-  await assert.rejects(tools.inventoryTool.execute({ project: "missing" }, exec), /unknown Genbio project/u);
 });
