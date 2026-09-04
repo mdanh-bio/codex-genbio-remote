@@ -13,6 +13,14 @@ description: >-
 
 # Operate Genbio HPC Remote
 
+This Codex plugin exposes the normal remote-operation route through its
+genbio_* MCP tools. Use the skill for policy context, diagnostics, and
+interpretation; do not perform remote mutations with raw SSH, SCP, scheduler,
+or transfer commands. All staging, submission, cancellation, retrieval,
+H100 operations, workflow advancement, and finalization must go through the
+MCP tools with the required owner_handle, fresh policy hash, and elicitation
+approval. Raw SSH examples below are diagnostic documentation only.
+
 This skill is the Genbio lab compute policy, not a generic SSH toolkit. Treat
 the current computer as an SSH client and every lab host as remote.
 
