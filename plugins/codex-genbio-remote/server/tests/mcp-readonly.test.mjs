@@ -46,4 +46,19 @@ test("policy status returns structured content and disabled remote reads fail cl
 test("config rejects relative paths and unknown fields", () => {
   assert.throws(() => validateConfig({ policyPath: "relative", dataRoot: "/tmp/x" }), /policyPath/u);
   assert.throws(() => validateConfig({ policyPath: "/tmp/p", dataRoot: "/tmp/x", surprise: true }), /unknown field/u);
+  assert.throws(() => validateConfig({ policyPath: "/tmp/p", dataRoot: "/tmp/x", rcloneRemote: { HPC: "bad;command" } }), /safe identifier/u);
+});
+
+test("owner handles are workspace-bound and enforce resource envelopes", async (t) => {
+  const { client } = await harness(t);
+  const created = await client.callTool({ name: "genbio_set_envelope", arguments: { target: "HPC", node: "gpu04", partition: "gpus", workload_class: "gpu", max_cpus: 4, max_gpus: 1, concurrency: 1, acknowledge_restrictions: true } });
+  assert.equal(created.structuredContent.ok, true);
+  const handle = created.structuredContent.owner_handle;
+  assert.match(handle, /^own_[a-f0-9]{32}$/u);
+  const accepted = await client.callTool({ name: "genbio_validate_resources", arguments: { owner_handle: handle, cpus: 4, gpus: 1, concurrency: 1 } });
+  assert.equal(accepted.structuredContent.fits, true);
+  const rejected = await client.callTool({ name: "genbio_validate_resources", arguments: { owner_handle: handle, cpus: 5, gpus: 1, concurrency: 1 } });
+  assert.equal(rejected.isError, true);
+  const unknown = await client.callTool({ name: "genbio_validate_resources", arguments: { owner_handle: "own_00000000000000000000000000000000", cpus: 1, gpus: 0, concurrency: 1 } });
+  assert.equal(unknown.isError, true);
 });

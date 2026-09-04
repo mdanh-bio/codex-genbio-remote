@@ -8,12 +8,17 @@ function absolute(value, label) {
 }
 export function validateConfig(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Genbio config must be a mapping");
-  const allowed = new Set(["policyPath", "dataRoot", "projectsDir", "workspaceRoot", "remoteReadEnabled", "commandTimeoutMs", "rcloneRemote", "h100DirectProjectsDir", "h100MirrorManifestPath"]);
+  const allowed = new Set(["policyPath", "dataRoot", "projectsDir", "workspaceRoot", "remoteReadEnabled", "commandTimeoutMs", "rcloneRemote", "h100DirectProjectsDir", "h100MirrorManifestPath", "logMaxBytes"]);
   for (const key of Object.keys(value)) if (!allowed.has(key)) throw new Error(`Genbio config contains unknown field ${key}`);
   const dataRoot = absolute(value.dataRoot, "dataRoot");
   const commandTimeoutMs = value.commandTimeoutMs ?? 30000;
   if (!Number.isSafeInteger(commandTimeoutMs) || commandTimeoutMs < 1000 || commandTimeoutMs > 180000) throw new Error("commandTimeoutMs must be 1000..180000");
-  return Object.freeze({ policyPath: absolute(value.policyPath, "policyPath"), dataRoot, projectsDir: value.projectsDir ? absolute(value.projectsDir, "projectsDir") : join(dataRoot, "projects"), workspaceRoot: value.workspaceRoot ? absolute(value.workspaceRoot, "workspaceRoot") : process.cwd(), remoteReadEnabled: value.remoteReadEnabled === true, commandTimeoutMs, rcloneRemote: value.rcloneRemote ?? {}, h100DirectProjectsDir: value.h100DirectProjectsDir ? absolute(value.h100DirectProjectsDir, "h100DirectProjectsDir") : null, h100MirrorManifestPath: value.h100MirrorManifestPath ? absolute(value.h100MirrorManifestPath, "h100MirrorManifestPath") : null, executionRegistryDir: join(dataRoot, "execution-registry"), workflowRegistryDir: join(dataRoot, "workflow-registry"), runRegistryDir: join(dataRoot, "run-registry") });
+  const rcloneRemote = value.rcloneRemote ?? {};
+  if (!rcloneRemote || typeof rcloneRemote !== "object" || Array.isArray(rcloneRemote)) throw new Error("rcloneRemote must be a mapping");
+  for (const [target, alias] of Object.entries(rcloneRemote)) {
+    if (!/^[A-Za-z0-9_.-]{1,64}$/u.test(target) || !/^[A-Za-z0-9_.-]{1,64}$/u.test(alias)) throw new Error("rcloneRemote names must contain only safe identifier characters");
+  }
+  return Object.freeze({ policyPath: absolute(value.policyPath, "policyPath"), dataRoot, projectsDir: value.projectsDir ? absolute(value.projectsDir, "projectsDir") : join(dataRoot, "projects"), workspaceRoot: value.workspaceRoot ? absolute(value.workspaceRoot, "workspaceRoot") : process.cwd(), remoteReadEnabled: value.remoteReadEnabled === true, commandTimeoutMs, logMaxBytes: value.logMaxBytes ?? 65536, rcloneRemote, h100DirectProjectsDir: value.h100DirectProjectsDir ? absolute(value.h100DirectProjectsDir, "h100DirectProjectsDir") : null, h100MirrorManifestPath: value.h100MirrorManifestPath ? absolute(value.h100MirrorManifestPath, "h100MirrorManifestPath") : null, executionRegistryDir: join(dataRoot, "execution-registry"), workflowRegistryDir: join(dataRoot, "workflow-registry"), runRegistryDir: join(dataRoot, "run-registry") });
 }
 export async function loadConfig(path = process.env.GENBIO_CONFIG_PATH) {
   if (typeof path !== "string" || !isAbsolute(path)) throw new Error("GENBIO_CONFIG_PATH must name an absolute YAML file");
