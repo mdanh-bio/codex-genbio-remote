@@ -70,5 +70,101 @@ export function registerExecutionTools(server, context) {
   wrappedTool(captured.get("genbio_project_execute"), { plan_hash: z.string().regex(/^[a-f0-9]{64}$/u) }, WRITE);
   wrappedTool(captured.get("genbio_project_cancel"), { project: NAME, operation: NAME, job_id: z.string().regex(/^[0-9]{1,10}$/u) }, DESTRUCTIVE);
   wrappedTool(captured.get("genbio_project_fetch"), { project: NAME, run_id: z.string().min(1).max(192), files: z.array(z.string().min(1).max(1024)).max(64).optional() }, WRITE);
+  server.registerTool("genbio_launch", {
+    description: "Launch one named policy-checked operation as a session-owned tracked background job.",
+    inputSchema: {
+      owner_handle: HANDLE,
+      target: z.enum(TARGETS),
+      operation: z.enum(["preflight-smoke", "gpu04-smoke"]),
+      cpus: z.number().int().min(1),
+      gpus: z.number().int().min(0),
+      mem_gb: z.number().int().min(1).optional(),
+      concurrency: z.number().int().min(1)
+    },
+    annotations: WRITE
+  }, async ({ owner_handle, target, operation, cpus, gpus, mem_gb, concurrency }) => {
+    const loaded = await context.getPolicy(); context.activePolicy = loaded;
+    const state = await owners.load(owner_handle);
+    if (state.policy.hash !== loaded.hash) throw new Error("policy hash changed; create a new owner envelope");
+    if (!state.envelope) throw new Error("set an owner resource envelope before launching work");
+    if (state.envelope.target !== target) throw new Error("operation target must match the active owner envelope");
+    if (cpus > state.envelope.maxCpus || gpus > state.envelope.maxGpus || concurrency > state.envelope.concurrency || (mem_gb !== undefined && state.envelope.memGb !== null && mem_gb > state.envelope.memGb)) {
+      throw new Error("requested resources exceed owner envelope; create a new explicit envelope");
+    }
+    if (target === "HPC" && operation !== "gpu04-smoke") throw new Error("HPC permits only the policy-pinned gpu04 smoke operation");
+    if (target === "HPC" && state.envelope.node !== "gpu04") throw new Error("HPC smoke operation is pinned to gpu04");
+    if (target === "genbioh100" && gpus > 1) throw new Error("genbioh100 permits GPU 0 only");
+    const HPC_SMOKE_ROOT = "/data01/genbiolab/mdanh/data/projects/dsh_policy_smoke";
+    if (operation === "gpu04-smoke") await requireRemoteAccess(target, [{ root: HPC_SMOKE_ROOT, write: true }], execFor(state), state);
+    const remoteBody = target === "genbioh100"
+      ? "set -eu; CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=16 /home/work/GenbioLAB/miniconda3/bin/python3 -c \'import os; assert os.environ[\"CUDA_VISIBLE_DEVICES\"]==\"0\"; assert os.environ[\"OMP_NUM_THREADS\"]==\"16\"; print(\"GENBIOH100_POLICY_SMOKE_OK\")\'"
+      : target === "HPC"
+        ? "set -eu; RUN_DIR=" + HPC_SMOKE_ROOT + "/runs/dsh-plugin-$(date -u +%Y%m%dT%H%M%SZ)-$$; test ! -e \"$RUN_DIR\"; mkdir -p \"$RUN_DIR/slurm\"; printf \'%s\\n\' \'#!/bin/bash\' \'#SBATCH --job-name=dsh_policy_smoke\' \'#SBATCH --partition=gpus\' \'#SBATCH --nodes=1\' \'#SBATCH --nodelist=gpu04\' \'#SBATCH --ntasks=1\' \'#SBATCH --cpus-per-task=1\' \'#SBATCH --output=%x_%j.out\' \'#SBATCH --error=%x_%j.err\' \'set -euo pipefail\' \'cd \"\$SLURM_SUBMIT_DIR\"\' \'printf \'\"\'\"\'%s\\n\'\"\'\"\' DSH_GPU04_POLICY_SMOKE_OK\' \'hostname -f\' \'date -u +%Y-%m-%dT%H:%M:%SZ\' > \"$RUN_DIR/slurm/gpu04_policy_smoke.sbatch\"; cd \"$RUN_DIR\"; JOB_ID=$(sbatch --parsable slurm/gpu04_policy_smoke.sbatch); printf \'JOB_ID=%s\\nRUN_DIR=%s\\n\' \"$JOB_ID\" \"$RUN_DIR\"; i=0; while test $i -lt 60 && squeue -h -j \"$JOB_ID\" | grep -q .; do sleep 2; i=$((i+1)); done; sacct -X -j \"$JOB_ID\" --format=JobIDRaw,State,ExitCode -P; STATE=$(sacct -X -n -j \"$JOB_ID\" --format=State -P | head -1 | cut -d+ -f1); EXIT_CODE=$(sacct -X -n -j \"$JOB_ID\" --format=ExitCode -P | head -1); cat \"$RUN_DIR/dsh_policy_smoke_${JOB_ID}.out\"; test \"$STATE\" = COMPLETED; test \"$EXIT_CODE\" = 0:0"
+        : "set -eu; hostname -f; nproc; free -h";
+    const SSH_OPTIONS = ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=yes"];
+    const command = `ssh ${SSH_OPTIONS.join(" ")} -- ${target} ${JSON.stringify(remoteBody).replace(/\$/g, "\\$")}`;
+    if (target === "HPC" && !loaded.policy.targets.HPC.allowlist?.gpu04) throw new Error("active policy does not have gpu04 in the HPC allowlist");
+    const run = {
+      runId: `${target}-${Date.now()}`,
+      target,
+      operation,
+      status: "running",
+      helperStatus: "running",
+      startedAt: Date.now(),
+      finishedAt: null,
+      stdout: "",
+      stderr: "",
+      error: null,
+      pid: null,
+      jobId: null,
+      resources: { cpus, gpus, memGb: mem_gb ?? null, concurrency },
+      policyHash: state.policy.hash,
+      node: state.envelope.node,
+      partition: state.envelope.partition,
+      envelope: JSON.parse(JSON.stringify(state.envelope)),
+      remoteGrants: JSON.parse(JSON.stringify(state.remoteGrants)),
+      finalization: null,
+      memory: { status: "not-finalized", error: null, openVikingSessionId: null, traceId: null }
+    };
+    run.jobId = jobs.start({
+      kind: `genbio-${target}`,
+      label: `${target} ${operation}`,
+      owner: execFor(state).agent,
+      run: () => {
+        const controller = new AbortController();
+        const done = (async () => {
+          try {
+            const timeoutMs = target === "HPC" ? Number(context.config.smokeTimeoutMs ?? 180000) : Number(context.config.commandTimeoutMs ?? 30000);
+            const res = await runRemote(target, command, { ...execFor(state), signal: controller.signal }, timeoutMs);
+            run.stdout = String(res.stdout).slice(-Number(context.config.logMaxBytes ?? 65536));
+            run.stderr = String(res.stderr).slice(-Number(context.config.logMaxBytes ?? 65536));
+            if (controller.signal.aborted) { run.status = "killed"; run.helperStatus = "killed"; run.error = null; return { status: "killed", detail: "cancelled" }; }
+            run.status = res.exitCode === 0 ? "completed" : "failed";
+            run.helperStatus = run.status;
+            run.error = res.exitCode === 0 ? null : run.stderr || `exit ${res.exitCode}`;
+            return { status: run.status, detail: run.error ?? `exit code: ${res.exitCode}` };
+          } catch (error) {
+            if (controller.signal.aborted) { run.status = "killed"; run.helperStatus = "killed"; run.error = null; return { status: "killed", detail: "cancelled" }; }
+            run.status = "failed"; run.helperStatus = "failed"; run.error = String(error?.message ?? error); return { status: "failed", detail: run.error };
+          } finally {
+            run.finishedAt = Date.now();
+          }
+        })();
+        return {
+          cancel: (reason) => controller.abort(reason ?? "Genbio job cancelled"),
+          done,
+          readOutput: () => {
+            const text = [run.stdout, run.stderr && `[stderr]\n${run.stderr}`, run.error && `[error] ${run.error}`].filter(Boolean).join("\n");
+            run.stdout = ""; run.stderr = ""; return text;
+          }
+        };
+      }
+    });
+    state.runs.push(run);
+    if (state.runs.length > 50) state.runs.splice(0, state.runs.length - 50);
+    await owners.save(state);
+    return result({ ok: true, status: { ...publicState(state), started: run } }, "Launched Genbio operation.");
+  });
+
   server.registerTool("genbio_monitor", { description: "Return the current bounded owner-run state.", inputSchema: { owner_handle: HANDLE, run_id: z.string().max(192).optional() }, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } }, async ({ owner_handle, run_id }) => { const state = await owners.load(owner_handle); const runs = run_id ? state.runs.filter((run) => run.runId === run_id) : state.runs; return result({ ok: true, runs }, `Returned ${runs.length} owner runs.`); });
 }
