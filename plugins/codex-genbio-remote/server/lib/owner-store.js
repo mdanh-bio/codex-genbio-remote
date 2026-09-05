@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { atomicWriteJson } from "./atomic-store.js";
 
 const HANDLE_RE = /^own_[a-f0-9]{32}$/u;
 const MAX_BYTES = 4 * 1024 * 1024;
@@ -16,12 +17,9 @@ export function createOwnerStore(dataRoot, workspaceRoot) {
     return state;
   }
   async function persist(state) {
-    await mkdir(root, { recursive: true });
     const text = `${JSON.stringify(state, (_key, value) => value instanceof Map || value instanceof Set ? undefined : value, 2)}\n`;
     if (Buffer.byteLength(text) > MAX_BYTES) throw new Error("owner state exceeds persistence limit");
-    const tmp = `${fileFor(state.ownerHandle)}.tmp-${randomBytes(6).toString("hex")}`;
-    await writeFile(tmp, text, { encoding: "utf8", mode: 0o600 });
-    await rename(tmp, fileFor(state.ownerHandle));
+    await atomicWriteJson(fileFor(state.ownerHandle), JSON.parse(text));
     cache.set(state.ownerHandle, state);
   }
   async function create(policyHash, envelope) {

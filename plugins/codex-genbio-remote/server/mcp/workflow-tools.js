@@ -21,7 +21,7 @@ export function registerWorkflowTools(server, context) {
   const register = (name, inputSchema, annotations) => {
     const tool = captured.get(name);
     server.registerTool(name, { description: tool.description, inputSchema: { owner_handle: HANDLE, ...inputSchema }, annotations }, async ({ owner_handle, ...args }) => {
-      const loaded = await context.getPolicy(); context.activePolicy = loaded;
+      const loaded = await context.getPolicy({ consequential: true }); context.activePolicy = loaded;
       const state = await runtime.owners.load(owner_handle);
       if (state.policy.hash !== loaded.hash) throw new Error("policy hash changed; create a new owner envelope");
       const output = await tool.execute(args, runtime.execFor(state));

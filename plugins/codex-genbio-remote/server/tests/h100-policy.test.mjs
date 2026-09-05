@@ -4,6 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { load as parseYaml } from "js-yaml";
 import { genbioh100ConcurrencyCap } from "../lib/slurm-policy.js";
+import { validateEnvelopeArgs } from "../lib/envelope.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 const envelopeSource = fs.readFileSync(path.join(root, "mcp/execution-tools.js"), "utf8");
@@ -68,8 +69,12 @@ test("the live policy tracks the owner-approved concurrent_cpu_jobs state", () =
 
 // ── setEnvelope + validatePolicy wiring (static, fail-closed) ─────────────────
 test("setEnvelope applies the CLASS-specific cap to genbioh100 envelopes", () => {
-  assert.match(envelopeSource, /genbioh100ConcurrencyCap\(policy, args\.max_gpus\)/u, "setEnvelope must compute the class cap from max_gpus");
-  assert.match(envelopeSource, /concurrency > classCap/u, "setEnvelope must bound concurrency by the class cap");
+  assert.match(envelopeSource, /validateEnvelopeArgs\(args, loaded.policy\)/u);
+  const policy = policyWith(1, 8);
+  const args = { target: "genbioh100", node: "genbioh100", max_cpus: 1, max_gpus: 0, mem_gb: 1, concurrency: 8 };
+  validateEnvelopeArgs(args, policy);
+  assert.throws(() => validateEnvelopeArgs({ ...args, max_gpus: 1 }, policy), /exceeds/);
+  assert.throws(() => validateEnvelopeArgs({ ...args, concurrency: 9 }, policy), /exceeds/);
 });
 
 test("validatePolicy validates concurrent_cpu_jobs only when present", () => {

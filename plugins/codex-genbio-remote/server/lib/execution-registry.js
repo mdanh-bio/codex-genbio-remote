@@ -23,7 +23,7 @@ function normalizeRecord(record) {
   assertKeys(record, new Set(["runId", "attemptId", "sessionId", "workspace", "target", "project", "operation", "status", "helperStatus", "workloadStatus", "allocationStatus", "token", "uniqueJobName", "sbatchIssued", "slurmJobId", "planHash", "manifestSha", "packageSha", "wrapperSha", "policyHash", "remoteBase", "remoteRunDir", "cpus", "gpus", "concurrency", "node", "partition", "slurmState", "exitCode", "elapsed", "workloadEvidence", "createdAt", "updatedAt", "finishedAt", "cancelRequestedAt", "note"]), "execution registry record");
   assertId(record.runId, "execution registry runId"); assertId(record.attemptId, "execution registry attemptId"); assertId(record.sessionId, "execution registry sessionId");
   if (typeof record.workspace !== "string" || !record.workspace.startsWith("/") || record.workspace.length > 1024) throw new Error("execution registry workspace is invalid");
-  if (record.target !== "HPC") throw new Error("execution registry target must be HPC");
+  if (!["HPC", "NHPC", "genbio_mdanh", "genbioh100"].includes(record.target)) throw new Error("execution registry target is invalid");
   assertName(record.project, "execution registry project"); assertName(record.operation, "execution registry operation");
   const status = boundedString(record.status, "execution registry status", 32, false);
   const helperStatus = boundedString(record.helperStatus, "execution registry helperStatus", 32, false);
@@ -97,7 +97,7 @@ export function createExecutionRegistry(rootDir) {
   }
   async function find(runId) { return (await list()).find((record) => record.runId === runId) ?? null; }
   async function activeForPair(workspace, project, operation) { return (await list()).filter((record) => record.workspace === workspace && record.project === project && record.operation === operation && ACTIVE_ALLOCATION.has(record.allocationStatus)); }
-  async function reserve({ sessionId, workspace, project, operation, planHash, manifestSha, packageSha, wrapperSha, policyHash, remoteBase, cpus, gpus, concurrency, node, partition, envelope }) {
+  async function reserve({ sessionId, workspace, target = "HPC", project, operation, planHash, manifestSha, packageSha, wrapperSha, policyHash, remoteBase, cpus, gpus, concurrency, node, partition, envelope }) {
     return transact((records) => {
       const existing = records.find((record) => record.workspace === workspace && record.project === project && record.operation === operation && ACTIVE_ALLOCATION.has(record.allocationStatus));
       if (existing) {
@@ -110,7 +110,7 @@ export function createExecutionRegistry(rootDir) {
         if (usedCpus + cpus > envelope.maxCpus || usedGpus + gpus > envelope.maxGpus || usedConcurrency + concurrency > envelope.concurrency) throw new Error(`durable aggregate capacity exceeded: ${usedCpus}/${envelope.maxCpus} CPU, ${usedGpus}/${envelope.maxGpus} GPU, ${usedConcurrency}/${envelope.concurrency} concurrency already reserved`);
       }
       const now = Date.now(); const token = randomBytes(16).toString("hex"); const attemptId = `att-${randomBytes(12).toString("hex")}`; const runId = `run-${randomBytes(12).toString("hex")}`;
-      const record = normalizeRecord({ runId, attemptId, sessionId, workspace, target: "HPC", project, operation, status: "running", helperStatus: "running", workloadStatus: "submitting", allocationStatus: "submitting", token, uniqueJobName: "pending", sbatchIssued: false, slurmJobId: null, planHash, manifestSha, packageSha, wrapperSha, policyHash, remoteBase, remoteRunDir: `${remoteBase}/runs/${attemptId}`, cpus, gpus, concurrency, node, partition, slurmState: null, exitCode: null, elapsed: null, workloadEvidence: "unobserved", createdAt: now, updatedAt: now, finishedAt: null, cancelRequestedAt: null, note: `outstanding:${outstanding.length}` });
+      const record = normalizeRecord({ runId, attemptId, sessionId, workspace, target, project, operation, status: "running", helperStatus: "running", workloadStatus: "submitting", allocationStatus: "submitting", token, uniqueJobName: "pending", sbatchIssued: false, slurmJobId: null, planHash, manifestSha, packageSha, wrapperSha, policyHash, remoteBase, remoteRunDir: `${remoteBase}/runs/${attemptId}`, cpus, gpus, concurrency, node, partition, slurmState: null, exitCode: null, elapsed: null, workloadEvidence: "unobserved", createdAt: now, updatedAt: now, finishedAt: null, cancelRequestedAt: null, note: `outstanding:${outstanding.length}` });
       records.push(record); return { record, outstanding };
     });
   }

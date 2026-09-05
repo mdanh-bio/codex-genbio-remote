@@ -1,12 +1,21 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import packageJson from "../package.json" with { type: "json" };
+import pluginJson from "../../.codex-plugin/plugin.json" with { type: "json" };
 import { validateConfig } from "../lib/config.js";
-import { createGenbioServer } from "../mcp/server.js";
+import { createGenbioServer, SERVER_INFO } from "../mcp/server.js";
+
+test("MCP server metadata matches package version", () => {
+  assert.equal(SERVER_INFO.name, "codex-genbio-remote");
+  assert.equal(SERVER_INFO.version, packageJson.version);
+  assert.equal(SERVER_INFO.version, pluginJson.version.split("+")[0]);
+});
 
 async function harness(t) {
   const root = await mkdtemp(join(tmpdir(), "genbio-mcp-"));
@@ -17,12 +26,49 @@ async function harness(t) {
   await writeFile(config.policyPath, `schema_version: 1\npolicy: genbio-remote-compute\nupdated: 2026-09-04\nssh:\n  client: openssh-native\n  noninteractive: true\n  options: {tty: false, batch_mode: true, connect_timeout_s: 10, strict_host_key_checking: yes, agent_forwarding: false, x11_forwarding: false, port_forwarding: false}\ntargets:\n  HPC:\n    ssh_target: HPC\n    surface: slurm\n    allowlist:\n      gpu04: {partition: gpus}\n      cpu01: {partition: cpus}\n  NHPC:\n    ssh_target: NHPC\n    surface: slurm\n    allowlist:\n      gpu01: {partition: gpu}\n  genbio_mdanh: {ssh_target: genbio_mdanh, surface: direct}\n  genbioh100:\n    ssh_target: genbioh100\n    surface: direct\n    limits: {gpus_allowed: [0]}\n    hardware: {reserved_gpu: 1, protected_process: gpu_util}\n`);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const server = createGenbioServer(config);
-  const client = new Client({ name: "phase-2-test", version: "1.0.0" });
+  const client = new Client({ name: "phase-2-test", version: "1.0.0" }, { capabilities: { elicitation: { form: {} } } });
+  client.setRequestHandler(ElicitRequestSchema, async (request) => ({ action: "accept", content: { approved: true, approval_id: request.params.requestedSchema.properties.approval_id.enum[0] } }));
   await server.connect(serverTransport);
   await client.connect(clientTransport);
   t.after(async () => { await client.close(); await server.close(); await rm(root, { recursive: true, force: true }); });
-  return { client };
+  return { client, config };
 }
+
+test("MCP rejects stale owners before launch, transfer, workflow, H100, and finalization effects", async (t) => {
+  const { client, config } = await harness(t);
+  const created = await client.callTool({ name: "genbio_set_envelope", arguments: { target: "HPC", node: "gpu04", partition: "gpus", workload_class: "cpu", max_cpus: 1, max_gpus: 0, concurrency: 1, acknowledge_restrictions: true } });
+  const owner_handle = created.structuredContent.owner_handle;
+  const before = await readFile(config.policyPath, "utf8");
+  await writeFile(config.policyPath, before + "\n# revised policy\n");
+  for (const [name, args] of [
+    ["genbio_launch", { target: "HPC", operation: "gpu04-smoke", cpus: 1, gpus: 0, concurrency: 1 }],
+    ["genbio_project_fetch", { project: "missing", run_id: "missing" }],
+    ["genbio_h100_direct_stage", { project: "missing" }],
+    ["genbio_finalize_run", { run_id: "missing", project: "x", summary: "x" }],
+    ["genbio_project_cancel", { project: "missing", operation: "x", job_id: "123" }]
+  ]) {
+    const out = await client.callTool({ name, arguments: { owner_handle, ...args } });
+    assert.equal(out.isError, true, name);
+    assert.match(out.content[0].text, /policy hash changed/, name);
+  }
+  await writeFile(config.policyPath, "broken: true");
+  const broken = await client.callTool({ name: "genbio_launch", arguments: { owner_handle, target: "HPC", operation: "gpu04-smoke", cpus: 1, gpus: 0, concurrency: 1 } });
+  assert.equal(broken.isError, true);
+  assert.match(broken.content[0].text, /policy/);
+});
+
+test("policy drift during elicitation cannot create an approved owner", async (t) => {
+  const { client, config } = await harness(t);
+  client.setRequestHandler(ElicitRequestSchema, async (request) => {
+    await writeFile(config.policyPath, (await readFile(config.policyPath, "utf8")) + "\n# change during approval\n");
+    return { action: "accept", content: { approved: true, approval_id: request.params.requestedSchema.properties.approval_id.enum[0] } };
+  });
+  const out = await client.callTool({ name: "genbio_set_envelope", arguments: { target: "HPC", node: "gpu04", partition: "gpus", workload_class: "cpu", max_cpus: 1, max_gpus: 0, concurrency: 1, acknowledge_restrictions: true } });
+  assert.equal(out.isError, true);
+  assert.match(out.content[0].text, /policy changed while approval/);
+  const owners = await readdir(join(config.dataRoot, "owners")).catch((error) => { if (error.code === "ENOENT") return []; throw error; });
+  assert.equal(owners.length, 0);
+});
 
 test("read-only MCP advertises bounded annotated tools", async (t) => {
   const { client } = await harness(t);

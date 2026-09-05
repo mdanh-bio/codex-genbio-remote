@@ -6,23 +6,59 @@ import { createJobRegistry, createQuestionAdapter, createRemoteRunner, createShe
 import { createProjectTools } from "../lib/project-tools.js";
 import { TARGETS } from "../lib/policy.js";
 import { createRunRegistry } from "../lib/run-registry.js";
-import { genbioh100ConcurrencyCap } from "../lib/slurm-policy.js";
+import { validateEnvelopeArgs } from "../lib/envelope.js";
+import { createSmokeService } from "../lib/smoke-launch.js";
 import { result } from "./results.js";
 
 const WRITE = Object.freeze({ readOnlyHint: false, destructiveHint: false, openWorldHint: true });
-const DESTRUCTIVE = Object.freeze({ readOnlyHint: false, destructiveHint: true, openWorldHint: true });
-const LOCAL_WRITE = Object.freeze({ readOnlyHint: false, destructiveHint: false, openWorldHint: false });
+const DESTRUCTIVE = Object.freeze({ ...WRITE, destructiveHint: true });
+const LOCAL_WRITE = Object.freeze({ ...WRITE, openWorldHint: false });
 const HANDLE = z.string().regex(/^own_[a-f0-9]{32}$/u);
 const NAME = z.string().regex(/^[a-z0-9][a-z0-9-]{0,127}$/u);
-
-function remoteInside(candidate, root) { return candidate === root || candidate.startsWith(`${root.replace(/\/$/u, "")}/`); }
+const positive = () => z.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
+const nonnegative = () => z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
+function remoteInside(candidate, root) { return candidate === root || candidate.startsWith(root.replace(/\/$/u, "") + "/"); }
 
 export function registerExecutionTools(server, context) {
   const owners = createOwnerStore(context.config.dataRoot, context.workspaceRoot);
-  const shell = createShellAdapter();
+  const scope = () => context.scope?.getStore();
+  const assertPolicy = async (state) => {
+    const loaded = await context.getPolicy({ consequential: true });
+    if (state && state.policy.hash !== loaded.hash) throw new Error("policy hash changed; create a new owner envelope");
+    context.activePolicy = loaded;
+    return loaded;
+  };
+  const beforeRun = async (exec) => {
+    const handle = scope()?.args?.owner_handle;
+    await assertPolicy(exec?.__state ?? (handle ? await owners.load(handle) : null));
+  };
+  const shell = createShellAdapter(beforeRun, context.config.logMaxBytes);
   const jobs = createJobRegistry();
-  const runRemote = createRemoteRunner();
-  const userQuestions = createQuestionAdapter(server);
+  const runRemote = createRemoteRunner(beforeRun, context.config.logMaxBytes);
+  const userQuestions = createQuestionAdapter(server, {
+    getContext: async () => {
+      const current = scope();
+      const state = current?.args?.owner_handle ? await owners.load(current.args.owner_handle) : null;
+      const loaded = await assertPolicy(state);
+      return { operation: current?.operation ?? "genbio-operation", owner_handle: state?.ownerHandle ?? null,
+        target: current?.approvalTarget ?? current?.args?.target ?? state?.envelope?.target ?? null,
+        roots: current?.roots ?? state?.remoteGrants ?? [], requested_resources: current?.args ?? {},
+        envelope: state?.envelope ?? null, current_use: state?.allocations ?? [], policy_hash: loaded.hash,
+        transfer: "See exact operation and transfer classification in the question" };
+    },
+    verify: async (details) => {
+      const loaded = await context.getPolicy({ consequential: true });
+      if (loaded.hash !== details.policy_hash) throw new Error("policy changed while approval was pending");
+    },
+    persist: async (receipt) => {
+      if (!receipt.owner_handle) { if (scope()) scope().envelopeApproval = receipt; return; }
+      const state = await owners.load(receipt.owner_handle);
+      state.approvals ??= [];
+      if (state.approvals.length >= 128) throw new Error("approval journal full; no further action authorized");
+      state.approvals.push(receipt);
+      await owners.save(state);
+    }
+  });
   const executionRegistry = createExecutionRegistry(context.config.executionRegistryDir);
   const runRegistry = createRunRegistry(context.config.runRegistryDir);
   const projectSource = createProjectSource(context.config);
@@ -30,11 +66,16 @@ export function registerExecutionTools(server, context) {
   const requirePolicy = () => { if (!context.activePolicy) throw new Error("policy is not loaded"); return context.activePolicy.policy; };
   const requireState = (exec) => exec.__state;
   const requireRemoteAccess = async (target, needs, exec, state) => {
-    const uncovered = needs.filter((need) => !state.remoteGrants.some((grant) => grant.target === target && remoteInside(need.root, grant.root) && (!need.write || grant.mode === "rw")));
+    await assertPolicy(state);
+    const roots = needs.map((need) => ({ root: need.root, mode: need.write ? "rw" : "ro" }));
+    if (scope()) { scope().roots = roots; scope().approvalTarget = target; }
+    const uncovered = needs.filter((need) => !state.remoteGrants.some((grant) => grant.target === target && grant.policyHash === state.policy.hash && remoteInside(need.root, grant.root) && (!need.write || grant.mode === "rw")));
     if (uncovered.length === 0) return state.remoteGrants;
-    const response = await userQuestions.ask({ questions: [{ id: "remote-grant", header: "Remote access", question: `Grant access to ${uncovered.map((item) => item.root).join(", ")} on ${target} for this owner handle?`, options: [{ label: "Approve this access", description: "Grant only the listed roots to this workspace-bound owner handle." }, { label: "Reject", description: "Do not access these remote roots." }] }] });
+    const response = await userQuestions.ask({ approval: { target, roots }, questions: [{ id: "remote-grant", header: "Remote access", question: "Grant the listed remote roots to this owner handle?", options: [{ label: "Approve this access", description: "Grant only the listed target, roots, and read/write modes under this policy hash." }, { label: "Reject", description: "Do not access these remote roots." }] }] });
     if (!response.answers[0].selected.includes("Approve this access")) throw new Error("remote folder access was not granted");
-    for (const need of uncovered) state.remoteGrants.push({ target, root: need.root, mode: need.write ? "rw" : "ro" });
+    await assertPolicy(state);
+    for (const need of uncovered) state.remoteGrants.push({ target, root: need.root, mode: need.write ? "rw" : "ro", policyHash: state.policy.hash });
+    await owners.save(state);
     return state.remoteGrants;
   };
   const execFor = (state) => ({ agent: { id: state.ownerHandle, session: { id: state.ownerHandle, header: { cwd: state.workspaceRoot } } }, signal: new AbortController().signal, __state: state });
@@ -43,128 +84,49 @@ export function registerExecutionTools(server, context) {
   createProjectTools({ makeTool, requirePolicy, requireState, publicState, config: context.config, runRemote, shell, userQuestions, jobs, requireRemoteAccess, projectSource, executionRegistry });
   context.execution = { owners, captured, execFor, publicState, requirePolicy, requireState, projectSource, runRemote, shell, userQuestions, jobs, requireRemoteAccess, runRegistry };
   const wrappedTool = (tool, inputSchema, annotations) => server.registerTool(tool.name, { description: tool.description, inputSchema: { owner_handle: HANDLE, ...inputSchema }, annotations }, async ({ owner_handle, ...args }) => {
-    const loaded = await context.getPolicy(); context.activePolicy = loaded;
     const state = await owners.load(owner_handle);
-    if (state.policy.hash !== loaded.hash) throw new Error("policy hash changed; create a new owner envelope");
+    await assertPolicy(state);
     const output = await tool.execute(args, execFor(state));
     await owners.save(state);
-    return result(output, `${tool.name} completed.`);
+    return result(output, tool.name + " completed.");
   });
-
-  server.registerTool("genbio_set_envelope", { description: "Create a persisted workspace-bound owner handle and policy-valid resource envelope.", inputSchema: { target: z.enum(TARGETS), node: z.string().min(1).max(64), partition: z.string().max(64).optional(), workload_class: z.string().min(1).max(64), max_cpus: z.number().int().min(1), max_gpus: z.number().int().min(0), mem_gb: z.number().int().min(1).optional(), concurrency: z.number().int().min(1), acknowledge_restrictions: z.literal(true) }, annotations: LOCAL_WRITE }, async (args) => {
-    const loaded = await context.getPolicy(); context.activePolicy = loaded;
-    const targetPolicy = loaded.policy.targets[args.target];
-    if (["HPC", "NHPC"].includes(args.target) && targetPolicy.allowlist?.[args.node]?.partition !== args.partition) throw new Error("node and partition do not match policy");
-    if (!["HPC", "NHPC"].includes(args.target) && args.node !== args.target) throw new Error("direct target node must equal target");
-    if (args.target === "genbioh100") {
-      const policy = loaded.policy;
-      const classCap = genbioh100ConcurrencyCap(policy, args.max_gpus);
-      if (args.max_gpus > 1 || args.max_cpus > targetPolicy.limits.cpu_threads_per_job || (args.mem_gb !== undefined && args.mem_gb > targetPolicy.limits.mem_gb_per_job) || args.concurrency > classCap) throw new Error("genbioh100 envelope exceeds policy");
-    }
+  server.registerTool("genbio_set_envelope", { description: "Approve and persist a workspace-bound owner resource envelope.", inputSchema: { target: z.enum(TARGETS), node: z.string().min(1).max(64), partition: z.string().max(64).optional(), workload_class: z.string().min(1).max(64), max_cpus: positive(), max_gpus: nonnegative(), mem_gb: positive().optional(), concurrency: positive(), acknowledge_restrictions: z.literal(true) }, annotations: LOCAL_WRITE }, async (args) => {
+    const loaded = await assertPolicy();
+    validateEnvelopeArgs(args, loaded.policy);
+    const answer = await userQuestions.ask({ questions: [{ id: "envelope", header: "Resource envelope", question: "Approve the displayed target and maximum resource envelope for this owner?", options: [{ label: "Approve envelope", description: "Authorize only this workload, target, resources, and policy snapshot." }, { label: "Reject", description: "Do not create an owner envelope." }] }] });
+    if (!answer.answers[0].selected.includes("Approve envelope")) throw new Error("envelope was not approved");
     const envelope = { target: args.target, node: args.node, partition: args.partition ?? null, workloadClass: args.workload_class, maxCpus: args.max_cpus, maxGpus: args.max_gpus, memGb: args.mem_gb ?? null, concurrency: args.concurrency, usedCpus: 0, usedGpus: 0 };
     const state = await owners.create(loaded.hash, envelope);
-    return result({ ok: true, owner_handle: state.ownerHandle, envelope }, "Created a workspace-bound Genbio owner handle.");
+    state.approvals = [{ ...scope()?.envelopeApproval, owner_handle: state.ownerHandle }];
+    await owners.save(state);
+    return result({ ok: true, owner_handle: state.ownerHandle, envelope }, "Created an approved owner envelope.");
   });
-  server.registerTool("genbio_validate_resources", { description: "Validate requested resources against an owner envelope without allocating.", inputSchema: { owner_handle: HANDLE, cpus: z.number().int().min(1), gpus: z.number().int().min(0), mem_gb: z.number().int().min(1).optional(), concurrency: z.number().int().min(1) }, annotations: LOCAL_WRITE }, async ({ owner_handle, ...requested }) => { const state = await owners.load(owner_handle); const e = state.envelope; const fits = requested.cpus <= e.maxCpus && requested.gpus <= e.maxGpus && requested.concurrency <= e.concurrency && (requested.mem_gb === undefined || e.memGb === null || requested.mem_gb <= e.memGb); if (!fits) throw new Error("requested resources exceed owner envelope; create a new explicit envelope"); return result({ ok: true, fits, requested, envelope: e }, "Resources fit the owner envelope."); });
+  server.registerTool("genbio_validate_resources", { description: "Validate resources against the current policy and owner envelope without allocating.", inputSchema: { owner_handle: HANDLE, cpus: positive(), gpus: nonnegative(), mem_gb: positive().optional(), concurrency: positive() }, annotations: LOCAL_WRITE }, async ({ owner_handle, ...requested }) => {
+    const state = await owners.load(owner_handle); await assertPolicy(state); const e = state.envelope;
+    if (e.memGb !== null && requested.mem_gb === undefined) throw new Error("mem_gb is required by envelope");
+    if (!(requested.cpus <= e.maxCpus && requested.gpus <= e.maxGpus && requested.concurrency <= e.concurrency && (requested.mem_gb === undefined || (e.memGb !== null && requested.mem_gb <= e.memGb)))) throw new Error("requested resources exceed owner envelope");
+    return result({ ok: true, fits: true, requested, envelope: e }, "Resources fit the owner envelope.");
+  });
   wrappedTool(captured.get("genbio_project_plan"), { project: NAME, operation: NAME, parameters: z.record(z.string(), z.unknown()).optional() }, LOCAL_WRITE);
   wrappedTool(captured.get("genbio_project_execute"), { plan_hash: z.string().regex(/^[a-f0-9]{64}$/u) }, WRITE);
   wrappedTool(captured.get("genbio_project_cancel"), { project: NAME, operation: NAME, job_id: z.string().regex(/^[0-9]{1,10}$/u) }, DESTRUCTIVE);
   wrappedTool(captured.get("genbio_project_fetch"), { project: NAME, run_id: z.string().min(1).max(192), files: z.array(z.string().min(1).max(1024)).max(64).optional() }, WRITE);
-  server.registerTool("genbio_launch", {
-    description: "Launch one named policy-checked operation as a session-owned tracked background job.",
-    inputSchema: {
-      owner_handle: HANDLE,
-      target: z.enum(TARGETS),
-      operation: z.enum(["preflight-smoke", "gpu04-smoke"]),
-      cpus: z.number().int().min(1),
-      gpus: z.number().int().min(0),
-      mem_gb: z.number().int().min(1).optional(),
-      concurrency: z.number().int().min(1)
-    },
-    annotations: WRITE
-  }, async ({ owner_handle, target, operation, cpus, gpus, mem_gb, concurrency }) => {
-    const loaded = await context.getPolicy(); context.activePolicy = loaded;
+  const smoke = createSmokeService({ config: context.config, registry: executionRegistry, owners, runRemote, execFor, requireRemoteAccess, userQuestions, assertPolicy });
+  server.registerTool("genbio_launch", { description: "Launch one fixed diagnostic smoke with durable exact-once dispatch and terminal evidence; not an arbitrary workload launcher.", inputSchema: { owner_handle: HANDLE, target: z.enum(TARGETS), operation: z.enum(["preflight-smoke", "gpu04-smoke"]), cpus: positive(), gpus: nonnegative(), mem_gb: positive().optional(), concurrency: positive() }, annotations: WRITE }, async ({ owner_handle, ...args }) => {
     const state = await owners.load(owner_handle);
-    if (state.policy.hash !== loaded.hash) throw new Error("policy hash changed; create a new owner envelope");
-    if (!state.envelope) throw new Error("set an owner resource envelope before launching work");
-    if (state.envelope.target !== target) throw new Error("operation target must match the active owner envelope");
-    if (cpus > state.envelope.maxCpus || gpus > state.envelope.maxGpus || concurrency > state.envelope.concurrency || (mem_gb !== undefined && state.envelope.memGb !== null && mem_gb > state.envelope.memGb)) {
-      throw new Error("requested resources exceed owner envelope; create a new explicit envelope");
-    }
-    if (target === "HPC" && operation !== "gpu04-smoke") throw new Error("HPC permits only the policy-pinned gpu04 smoke operation");
-    if (target === "HPC" && state.envelope.node !== "gpu04") throw new Error("HPC smoke operation is pinned to gpu04");
-    if (target === "genbioh100" && gpus > 1) throw new Error("genbioh100 permits GPU 0 only");
-    const HPC_SMOKE_ROOT = "/data01/genbiolab/mdanh/data/projects/dsh_policy_smoke";
-    if (operation === "gpu04-smoke") await requireRemoteAccess(target, [{ root: HPC_SMOKE_ROOT, write: true }], execFor(state), state);
-    const remoteBody = target === "genbioh100"
-      ? "set -eu; CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=16 /home/work/GenbioLAB/miniconda3/bin/python3 -c \'import os; assert os.environ[\"CUDA_VISIBLE_DEVICES\"]==\"0\"; assert os.environ[\"OMP_NUM_THREADS\"]==\"16\"; print(\"GENBIOH100_POLICY_SMOKE_OK\")\'"
-      : target === "HPC"
-        ? "set -eu; RUN_DIR=" + HPC_SMOKE_ROOT + "/runs/dsh-plugin-$(date -u +%Y%m%dT%H%M%SZ)-$$; test ! -e \"$RUN_DIR\"; mkdir -p \"$RUN_DIR/slurm\"; printf \'%s\\n\' \'#!/bin/bash\' \'#SBATCH --job-name=dsh_policy_smoke\' \'#SBATCH --partition=gpus\' \'#SBATCH --nodes=1\' \'#SBATCH --nodelist=gpu04\' \'#SBATCH --ntasks=1\' \'#SBATCH --cpus-per-task=1\' \'#SBATCH --output=%x_%j.out\' \'#SBATCH --error=%x_%j.err\' \'set -euo pipefail\' \'cd \"\$SLURM_SUBMIT_DIR\"\' \'printf \'\"\'\"\'%s\\n\'\"\'\"\' DSH_GPU04_POLICY_SMOKE_OK\' \'hostname -f\' \'date -u +%Y-%m-%dT%H:%M:%SZ\' > \"$RUN_DIR/slurm/gpu04_policy_smoke.sbatch\"; cd \"$RUN_DIR\"; JOB_ID=$(sbatch --parsable slurm/gpu04_policy_smoke.sbatch); printf \'JOB_ID=%s\\nRUN_DIR=%s\\n\' \"$JOB_ID\" \"$RUN_DIR\"; i=0; while test $i -lt 60 && squeue -h -j \"$JOB_ID\" | grep -q .; do sleep 2; i=$((i+1)); done; sacct -X -j \"$JOB_ID\" --format=JobIDRaw,State,ExitCode -P; STATE=$(sacct -X -n -j \"$JOB_ID\" --format=State -P | head -1 | cut -d+ -f1); EXIT_CODE=$(sacct -X -n -j \"$JOB_ID\" --format=ExitCode -P | head -1); cat \"$RUN_DIR/dsh_policy_smoke_${JOB_ID}.out\"; test \"$STATE\" = COMPLETED; test \"$EXIT_CODE\" = 0:0"
-        : "set -eu; hostname -f; nproc; free -h";
-    const SSH_OPTIONS = ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=yes"];
-    const command = `ssh ${SSH_OPTIONS.join(" ")} -- ${target} ${JSON.stringify(remoteBody).replace(/\$/g, "\\$")}`;
-    if (target === "HPC" && !loaded.policy.targets.HPC.allowlist?.gpu04) throw new Error("active policy does not have gpu04 in the HPC allowlist");
-    const run = {
-      runId: `${target}-${Date.now()}`,
-      target,
-      operation,
-      status: "running",
-      helperStatus: "running",
-      startedAt: Date.now(),
-      finishedAt: null,
-      stdout: "",
-      stderr: "",
-      error: null,
-      pid: null,
-      jobId: null,
-      resources: { cpus, gpus, memGb: mem_gb ?? null, concurrency },
-      policyHash: state.policy.hash,
-      node: state.envelope.node,
-      partition: state.envelope.partition,
-      envelope: JSON.parse(JSON.stringify(state.envelope)),
-      remoteGrants: JSON.parse(JSON.stringify(state.remoteGrants)),
-      finalization: null,
-      memory: { status: "not-finalized", error: null, openVikingSessionId: null, traceId: null }
-    };
-    run.jobId = jobs.start({
-      kind: `genbio-${target}`,
-      label: `${target} ${operation}`,
-      owner: execFor(state).agent,
-      run: () => {
-        const controller = new AbortController();
-        const done = (async () => {
-          try {
-            const timeoutMs = target === "HPC" ? Number(context.config.smokeTimeoutMs ?? 180000) : Number(context.config.commandTimeoutMs ?? 30000);
-            const res = await runRemote(target, command, { ...execFor(state), signal: controller.signal }, timeoutMs);
-            run.stdout = String(res.stdout).slice(-Number(context.config.logMaxBytes ?? 65536));
-            run.stderr = String(res.stderr).slice(-Number(context.config.logMaxBytes ?? 65536));
-            if (controller.signal.aborted) { run.status = "killed"; run.helperStatus = "killed"; run.error = null; return { status: "killed", detail: "cancelled" }; }
-            run.status = res.exitCode === 0 ? "completed" : "failed";
-            run.helperStatus = run.status;
-            run.error = res.exitCode === 0 ? null : run.stderr || `exit ${res.exitCode}`;
-            return { status: run.status, detail: run.error ?? `exit code: ${res.exitCode}` };
-          } catch (error) {
-            if (controller.signal.aborted) { run.status = "killed"; run.helperStatus = "killed"; run.error = null; return { status: "killed", detail: "cancelled" }; }
-            run.status = "failed"; run.helperStatus = "failed"; run.error = String(error?.message ?? error); return { status: "failed", detail: run.error };
-          } finally {
-            run.finishedAt = Date.now();
-          }
-        })();
-        return {
-          cancel: (reason) => controller.abort(reason ?? "Genbio job cancelled"),
-          done,
-          readOutput: () => {
-            const text = [run.stdout, run.stderr && `[stderr]\n${run.stderr}`, run.error && `[error] ${run.error}`].filter(Boolean).join("\n");
-            run.stdout = ""; run.stderr = ""; return text;
-          }
-        };
-      }
-    });
-    state.runs.push(run);
-    if (state.runs.length > 50) state.runs.splice(0, state.runs.length - 50);
-    await owners.save(state);
-    return result({ ok: true, status: { ...publicState(state), started: run } }, "Launched Genbio operation.");
+    const run = await smoke.launch(state, args);
+    return result({ ok: run.status !== "failed", status: { ...publicState(state), started: run } }, "Smoke run recorded; inspect its evidence status.");
   });
-
-  server.registerTool("genbio_monitor", { description: "Return the current bounded owner-run state.", inputSchema: { owner_handle: HANDLE, run_id: z.string().max(192).optional() }, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } }, async ({ owner_handle, run_id }) => { const state = await owners.load(owner_handle); const runs = run_id ? state.runs.filter((run) => run.runId === run_id) : state.runs; return result({ ok: true, runs }, `Returned ${runs.length} owner runs.`); });
+  server.registerTool("genbio_monitor", { description: "Read owner-run state; reconcile=true collects bounded evidence for an exact smoke run without replaying it.", inputSchema: { owner_handle: HANDLE, run_id: z.string().max(192).optional(), reconcile: z.boolean().optional() }, annotations: WRITE }, async ({ owner_handle, run_id, reconcile = false }) => {
+    const state = await owners.load(owner_handle);
+    if (reconcile) {
+      if (!run_id) throw new Error("reconciliation requires exact run_id");
+      await assertPolicy(state);
+      const run = state.runs.find((item) => item.runId === run_id);
+      if (!run) throw new Error("unknown owner run");
+      await smoke.monitor(state, run);
+    }
+    const runs = run_id ? state.runs.filter((run) => run.runId === run_id) : state.runs;
+    return result({ ok: true, runs }, "Returned bounded owner runs.");
+  });
 }

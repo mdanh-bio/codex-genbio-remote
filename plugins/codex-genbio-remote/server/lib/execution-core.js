@@ -197,12 +197,13 @@ async function stageAndValidate({ manifest, exec, userQuestions, shell, runRemot
 //
 const SAFE_NODE_RE = /^[a-z0-9][a-z0-9-]*$/u;
 const USABLE_NODE_STATES = new Set(["idle", "alloc", "mix"]);
-export async function probeNodeHeadroom({ exec, runRemote, cpus, gpus, node }) {
+export async function probeNodeHeadroom({ exec, runRemote, cpus, gpus, node, target = "HPC" }) {
+  if (!["HPC", "NHPC"].includes(target)) throw new Error("headroom probe requires Slurm target");
   if (typeof node !== "string" || !SAFE_NODE_RE.test(node)) throw new Error("probeNodeHeadroom requires a safe target node");
   const cpusReq = Number(cpus), gpusReq = Number(gpus);
   if (!Number.isInteger(cpusReq) || !Number.isInteger(gpusReq) || cpusReq < 0 || gpusReq < 0) throw new Error(`invalid node probe resources: ${cpus}/${gpus}`);
   const body = `set -eu; line=$(scontrol show node ${node} -o 2>/dev/null || true); printf 'NODE_PROBE=%s\n' "$line"`;
-  const result = await runRemote("HPC", strictRemote("HPC", body), exec, 30000);
+  const result = await runRemote(target, strictRemote(target, body), exec, 30000);
   if (result.exitCode !== 0) throw new Error(`${node} pre-submit probe failed: ${result.stderr || result.stdout || result.exitCode}`);
   const lines = String(result.stdout).split(/\r?\n/u).map((l) => l.trim()).filter(Boolean);
   const probeLine = lines.find((l) => l.startsWith("NODE_PROBE="));
