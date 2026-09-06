@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { load as parseYaml } from "js-yaml";
 
@@ -31,7 +32,21 @@ export function validateConfig(value) {
   }
   return Object.freeze({ policyPath: absolute(value.policyPath, "policyPath"), dataRoot, projectsDir: value.projectsDir ? absolute(value.projectsDir, "projectsDir") : join(dataRoot, "projects"), workspaceRoot: value.workspaceRoot ? absolute(value.workspaceRoot, "workspaceRoot") : process.cwd(), remoteReadEnabled: value.remoteReadEnabled === true, commandTimeoutMs, smokeTimeoutMs, logMaxBytes, smokeRoots: Object.freeze(smokeRoots), rcloneRemote, h100DirectProjectsDir: value.h100DirectProjectsDir ? absolute(value.h100DirectProjectsDir, "h100DirectProjectsDir") : null, h100MirrorManifestPath: value.h100MirrorManifestPath ? absolute(value.h100MirrorManifestPath, "h100MirrorManifestPath") : null, executionRegistryDir: join(dataRoot, "execution-registry"), workflowRegistryDir: join(dataRoot, "workflow-registry"), runRegistryDir: join(dataRoot, "run-registry") });
 }
-export async function loadConfig(path = process.env.GENBIO_CONFIG_PATH) {
+
+export function resolveConfigPath(env = process.env) {
+  const explicit = env.GENBIO_CONFIG_PATH?.trim();
+  if (explicit) return absolute(explicit, "GENBIO_CONFIG_PATH");
+  const codexHome = env.CODEX_HOME?.trim() || join(homedir(), ".codex");
+  return join(absolute(codexHome, "CODEX_HOME"), "codex-genbio-remote", "config.yaml");
+}
+
+export async function loadConfig(path = resolveConfigPath()) {
   if (typeof path !== "string" || !isAbsolute(path)) throw new Error("GENBIO_CONFIG_PATH must name an absolute YAML file");
-  return validateConfig(parseYaml(await readFile(path, "utf8")));
+  let content;
+  try {
+    content = await readFile(path, "utf8");
+  } catch (error) {
+    throw new Error(`Unable to read Genbio configuration file (${error?.code ?? "read error"})`, { cause: error });
+  }
+  return validateConfig(parseYaml(content));
 }
