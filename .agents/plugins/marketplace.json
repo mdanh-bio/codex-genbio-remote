@@ -1,0 +1,20 @@
+{
+  "name": "codex-genbio-remote",
+  "interface": {
+    "displayName": "Codex Genbio Remote"
+  },
+  "plugins": [
+    {
+      "name": "codex-genbio-remote",
+      "source": {
+        "source": "local",
+        "path": "./plugins/codex-genbio-remote"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

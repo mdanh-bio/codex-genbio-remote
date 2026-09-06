@@ -1,0 +1,26 @@
+{
+  "name": "codex-genbio-remote",
+  "version": "0.4.1+codex.20260905154117",
+  "description": "Policy-guided Genbio remote compute workflows for Codex.",
+  "author": {
+    "name": "mdanh-bio"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex Genbio Remote",
+    "shortDescription": "Operate approved Genbio compute targets under explicit safety policy.",
+    "longDescription": "Provides provider-neutral, approval-gated Genbio policy, project, workflow, H100, transfer, finalization, and optional OpenViking publication tools through Codex MCP.",
+    "developerName": "mdanh-bio",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Remote compute policy",
+      "Slurm workflows",
+      "H100 operations",
+      "Durable records"
+    ],
+    "defaultPrompt": [
+      "Inspect policy and prepare an approval-gated Genbio operation."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

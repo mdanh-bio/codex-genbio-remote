@@ -1,0 +1,23 @@
+{
+  "name": "@mdanh-bio/codex-genbio-remote-server",
+  "version": "0.4.1",
+  "description": "Provider-neutral core for the Codex Genbio Remote MCP server.",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "check:syntax": "node scripts/check-syntax.mjs",
+    "check:release": "node scripts/check-release.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "check": "npm run check:syntax && npm test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "js-yaml": "^4.1.0",
+    "zod": "^3.24.0"
+  }
+}

@@ -3,6 +3,12 @@
 Read this file completely before preparing, submitting, or operating a Genbio
 HPC job from another computer.
 
+All consequential operations use the plugin's genbio_* MCP tools. The shell
+blocks below describe the implementation contract for diagnostic review; they
+are not executable instructions for an agent and do not authorize raw SSH,
+SCP, scheduler, transfer, or installation fallback. The configured runtime YAML
+is the executable authority; report differences from this bundled reference.
+
 ## Contents
 
 - [Runtime And Precedence](#runtime-and-precedence)
@@ -24,13 +30,14 @@ Treat the current computer as an SSH client and the Genbio Slurm login/control
 hosts as remote. Use exact target `HPC` for the original cluster and exact target
 `NHPC` for the new cluster; use `genbio_mdanh`
 for direct lab workstation work. Use another exact target only when the user
-confirms it for the current conversation. If the current and remote host
-identities are the same, route to local scheduler work instead of SSH.
+confirms it for the current conversation and the policy/tool supports it. If the
+current and remote host identities are the same, stop and resolve the topology;
+do not bypass MCP by invoking a local scheduler.
 
 Current alias state:
 
 - `HPC` is the original Genbio Slurm control host; only `gpu04`/`cpu01` are active here.
-- `NHPC` is the new Genbio Slurm control host; the former physical `gpu03` is `gpu01` in partition `gpu` here.
+- `NHPC` is the new Genbio Slurm control host; its allowed node is `gpu01` in partition `gpu`.
 - `gpu01` is forbidden on `HPC` but valid only when paired with target `NHPC`.
 - `genbio_mdanh` is the current direct lab workstation alias.
 - `genbio` is legacy and must not be used.
@@ -141,8 +148,8 @@ Effective array concurrency is the declared `%CONCURRENCY` cap, bounded by the
 number of array tasks. Count pending or running jobs launched under the same
 envelope when they may overlap. Do not double-count dependency-linked jobs that
 are guaranteed not to overlap. Require post-submit use to remain within the
-session ceilings and live remote headroom. Keep a `gpu03` CPU envelope at or
-below 80. On `gpu04`, keep existing and proposed concurrent GPU jobs at or
+session ceilings and live remote headroom. Keep the `NHPC/gpu01` aggregate CPU envelope at or
+below 80. On `HPC/gpu04`, keep existing and proposed concurrent GPU jobs at or
 below four.
 
 If a job does not fit, wait, serialize it with a dependency, reduce its
@@ -356,7 +363,7 @@ for the legacy `genbio` alias. It is a plain SSH target without a scheduler:
 Record every finished run with `scripts/record_run.py --manifest <path>`. The
 manifest must contain:
 
-- `target`: `HPC`, `genbio_mdanh`, or `genbioh100`.
+- `target`: `HPC`, `NHPC`, `genbio_mdanh`, or `genbioh100`.
 - `remote_path`: absolute remote run directory.
 - `command`: exact submission or launch command.
 - `envelope`: node and aggregate CPU/GPU limits plus used resources.

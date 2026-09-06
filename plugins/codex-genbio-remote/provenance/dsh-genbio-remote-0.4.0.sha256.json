@@ -1,0 +1,436 @@
+{
+  "schemaVersion": 1,
+  "capturedOn": "2026-09-04",
+  "sourceRoot": "/Users/mdanh/.dsh/profiles/desktop/dsh-genbio-remote",
+  "package": {
+    "name": "dsh-genbio-remote",
+    "version": "0.4.0",
+    "license": "MIT"
+  },
+  "exclusions": {
+    "directories": [
+      ".git",
+      "backups",
+      "coverage",
+      "dist",
+      "node_modules"
+    ],
+    "files": [
+      ".DS_Store",
+      "cordis.patch.yml"
+    ]
+  },
+  "requiredHashes": {
+    "package.json": "1655708dacc6eadf988c8ed13f42dac7c73d0c69059b66749afb0f836a7c8bce",
+    "package-lock.json": "16784818d34de490011b9d2acdb8866752ed97ebb0090d5b9ccb8da1cf51190d",
+    "LICENSE": "c84220da6f6696988d504789dbbbef1df770384f2d91ea59cc445db4da480c37"
+  },
+  "fileCount": 81,
+  "files": [
+    {
+      "path": ".github/workflows/check.yml",
+      "size": 411,
+      "sha256": "36e1f7571d5090b22b1af437d5d8e405a350f6c08bb04180aa9664afd4a4afce"
+    },
+    {
+      "path": ".gitignore",
+      "size": 270,
+      "sha256": "db94b003f9162c134824df5a7d7bd9e9e636b7f9f3135cbcc7d9b3e6237a7d4c"
+    },
+    {
+      "path": ".t12-compat-probe.mjs",
+      "size": 2835,
+      "sha256": "0fea0966adbae645d2df85494832bff417c8aeb4146824d3425711f6ec730b56"
+    },
+    {
+      "path": "CHANGELOG.md",
+      "size": 3881,
+      "sha256": "4085f620b86961857ef15e255382a4374f43538f0b8258aea7e963c54e1c0109"
+    },
+    {
+      "path": "LICENSE",
+      "size": 1068,
+      "sha256": "c84220da6f6696988d504789dbbbef1df770384f2d91ea59cc445db4da480c37"
+    },
+    {
+      "path": "README.md",
+      "size": 3369,
+      "sha256": "392ee2778217fd3ae7e048cf7d5296f25365631a83e231b0ce3a9f1aa3d73c2e"
+    },
+    {
+      "path": "cordis.patch.example.yml",
+      "size": 1094,
+      "sha256": "f4a9e3f6847d4f0efc8790b78af66a22991001652618ed4487316f7fc2b28d6d"
+    },
+    {
+      "path": "docs/H100-DIRECT.md",
+      "size": 2260,
+      "sha256": "0ad090682095f14cf66395c57624b7480289dbef1e34a4d4129dc6672a58749f"
+    },
+    {
+      "path": "docs/INSTALL.md",
+      "size": 1656,
+      "sha256": "f3400c7eecf48ebbf1f7426cf70d3a990afce3ec6d2e2597703d2cf5aef7e59c"
+    },
+    {
+      "path": "docs/PROJECT-MANIFEST.md",
+      "size": 2622,
+      "sha256": "5e6165429dac9d22a284f4b5f58c17516f17320ea04d1c811157ec68c590fae6"
+    },
+    {
+      "path": "docs/WORKFLOWS.md",
+      "size": 1741,
+      "sha256": "a3eec8619e920b26df3a8e99df761532f41d51fd425f2a8060006d45b640d08d"
+    },
+    {
+      "path": "examples/genbio-project.yml",
+      "size": 411,
+      "sha256": "1a9a0061556521909909478665cdb0cbc4d08726563e2d12ad0d6708b6bbd106"
+    },
+    {
+      "path": "examples/production-workflow.yml",
+      "size": 130,
+      "sha256": "c9ea5a6c2c1fdfbb84c32b1f20025652750244a24dbced928dc91de5a679c91b"
+    },
+    {
+      "path": "fixtures/aizyme-h100/AIzymes-52176ff.tar.gz",
+      "size": 79086,
+      "sha256": "f408113ab7c2fbbfa2771312d0c0eaae308565da521f0d01f713ddc04441a70a"
+    },
+    {
+      "path": "fixtures/aizyme-h100/stage2_environment_genbioh100.sh",
+      "size": 25888,
+      "sha256": "23c4394b27a6d49a54b240c92cb8784278146b30b2499a819d4892d73f445d46"
+    },
+    {
+      "path": "fixtures/genbio-compute-policy.test.yaml",
+      "size": 9520,
+      "sha256": "627ccebde2659df60c9a8f96d3c1c8d5a13194b76ced54612458b2b75152f797"
+    },
+    {
+      "path": "lib/aggregate.js",
+      "size": 10055,
+      "sha256": "7d10410068ce0ce31c3af74146d6e731bfb330ae4a0523a16f96d006917fb7ab"
+    },
+    {
+      "path": "lib/aizyme-h100-prep.js",
+      "size": 14143,
+      "sha256": "3db590f52c24a9c760b9ddf0378780c2a795f03aadf0355ee2c50dc176c6b1d5"
+    },
+    {
+      "path": "lib/aizyme-h100.js",
+      "size": 40887,
+      "sha256": "f0ba959fead914deb649426d8fdddebcb2998f50c014388a8f89a19ce64a003a"
+    },
+    {
+      "path": "lib/atomic-store.js",
+      "size": 3009,
+      "sha256": "38ad358c7589f7edda4c74148fb71fb11796b9c906b18295f52bf0587a793a17"
+    },
+    {
+      "path": "lib/client.js",
+      "size": 20103,
+      "sha256": "111f33da93da475de1c061b99d70445a528abe350cef42b9f1e9e33932433880"
+    },
+    {
+      "path": "lib/execution-core.js",
+      "size": 59128,
+      "sha256": "b2df78242f258aeafb1d8bff34e697c06dc7fa6d4a8d87efd4e93d1c1a35053c"
+    },
+    {
+      "path": "lib/execution-registry.js",
+      "size": 11759,
+      "sha256": "3b41bd90400691ced0596a520ab5a8da9cd08d9ff75337b22147d79ba4457f15"
+    },
+    {
+      "path": "lib/h100-direct.js",
+      "size": 60663,
+      "sha256": "5c709fcadbee771b83459ad619d9c1fd330b2209f7fbd641afa128824f237aa6"
+    },
+    {
+      "path": "lib/h100-mirror.js",
+      "size": 21858,
+      "sha256": "82640f92c7bb36d717737379b03f5a814abbf12f60e1e7d8cfe676da93cfb1cb"
+    },
+    {
+      "path": "lib/index.js",
+      "size": 66735,
+      "sha256": "39bf1ecf09463023199a0051c10bda2a477b52afe976737a30c0645c6e22e548"
+    },
+    {
+      "path": "lib/inventory.js",
+      "size": 2093,
+      "sha256": "795a82a1d2b7b3481a81f240bde0a23ff871b5ca5c6a7393f4300160d740765f"
+    },
+    {
+      "path": "lib/openviking.js",
+      "size": 953,
+      "sha256": "2d48679c6968aaf33d25ee3310d9cfda9a874a1f539393c813f1314ab5f7fdc6"
+    },
+    {
+      "path": "lib/project-source.js",
+      "size": 8597,
+      "sha256": "dcbcc104893d995358a0d4e08477ee063c34f92040b4824b3d5d9447f2e466a4"
+    },
+    {
+      "path": "lib/project-status-tools.js",
+      "size": 3525,
+      "sha256": "6dea48eb2e9d95911492dbb751788a7d92ff691d41dba03a74d21817643e15c1"
+    },
+    {
+      "path": "lib/project-tools.js",
+      "size": 28617,
+      "sha256": "9bc2a3d2f08daa4a672b4eb5a742bb59807438641d57a48adf837fba387918d7"
+    },
+    {
+      "path": "lib/project.js",
+      "size": 19119,
+      "sha256": "9b232056938d9c07a01d83d33ddc1b57358539d7aed6a82d26033fd69703d264"
+    },
+    {
+      "path": "lib/run-registry.js",
+      "size": 22250,
+      "sha256": "e1327232f6a127d5c29dd9c58ed0c6bd361da905df68bc81cf18b02381f91341"
+    },
+    {
+      "path": "lib/scheduler-evidence.js",
+      "size": 2293,
+      "sha256": "86db2830286ae4fea6ca077fdf533e4bb833213e604617c6b07aa14cdb15bf81"
+    },
+    {
+      "path": "lib/secure-package.js",
+      "size": 4614,
+      "sha256": "393c754b001ca2d127f54ac522b3627de392eb3a2cf45a681f116504c4f66204"
+    },
+    {
+      "path": "lib/shell.js",
+      "size": 272,
+      "sha256": "f98c86ed0e1ff11526865fb3283138276c962f195bd677d8fd845f5f69effdc8"
+    },
+    {
+      "path": "lib/slurm-discovery.js",
+      "size": 1783,
+      "sha256": "fd1234b13c418582f78e6018e908f80fc302fafe26976864495f4fbace671e69"
+    },
+    {
+      "path": "lib/slurm-policy.js",
+      "size": 12933,
+      "sha256": "2aed44c215cbd78a06eba29933a42760e3db3254fa1a78feef92b5631e3dc9cc"
+    },
+    {
+      "path": "lib/transfer.js",
+      "size": 5444,
+      "sha256": "9ac543b21492a53e1e8dcb3c68cb2e16a3e0c022f93e917268f373e3838c9e23"
+    },
+    {
+      "path": "lib/workflow-registry.js",
+      "size": 21219,
+      "sha256": "bf346385a5c1dffae1e089112f2e0acc12b83065fa72f222942b6977cc9c93b5"
+    },
+    {
+      "path": "lib/workflow-tools.js",
+      "size": 19753,
+      "sha256": "b244933712192b19e79d8fcfb6bbcd22834c8430e3ae39b37b3db791d537b746"
+    },
+    {
+      "path": "lib/workflow.js",
+      "size": 12379,
+      "sha256": "cd7892f663cc410269b7449695900f52a2fe139eeab60047446881c0f1d48511"
+    },
+    {
+      "path": "package-lock.json",
+      "size": 12127,
+      "sha256": "16784818d34de490011b9d2acdb8866752ed97ebb0090d5b9ccb8da1cf51190d"
+    },
+    {
+      "path": "package.json",
+      "size": 3234,
+      "sha256": "1655708dacc6eadf988c8ed13f42dac7c73d0c69059b66749afb0f836a7c8bce"
+    },
+    {
+      "path": "tests/aggregate.test.mjs",
+      "size": 9459,
+      "sha256": "45c245e4f567a6f1c9691310c0616b8509fea93d5595ba51a18aa23320483fa0"
+    },
+    {
+      "path": "tests/aizyme-h100-adversarial.test.mjs",
+      "size": 42345,
+      "sha256": "b49e797f07f6023f19ed032207d9ff63a4a1671bae139aaef8f378998b976c8e"
+    },
+    {
+      "path": "tests/aizyme-h100-prep.test.mjs",
+      "size": 2830,
+      "sha256": "054c08b575bb5f22a2c74b1a9bbeb20f5af73444f46d6cbeb88d4a41dbd8c6b2"
+    },
+    {
+      "path": "tests/aizyme-h100-stage2.test.mjs",
+      "size": 40225,
+      "sha256": "ce10a0989af2801b39d6e29a6564452a273914d200406473970212d66af2c27b"
+    },
+    {
+      "path": "tests/aizyme-h100-stale-lock.test.mjs",
+      "size": 1264,
+      "sha256": "57ff8feeb1530649ec0302ba4c465c1a1ea36173c0358019744ed087d0809267"
+    },
+    {
+      "path": "tests/atomic-store.test.mjs",
+      "size": 1597,
+      "sha256": "538f7a59c7dab075f4fe589f899e676bc30895aad97187d9d1bf42e10923f03d"
+    },
+    {
+      "path": "tests/client-readonly.test.mjs",
+      "size": 2817,
+      "sha256": "b95e45da0e5bdf751be4c6277e6f9dda48f9322b57331cb12dce5d3acadf1060"
+    },
+    {
+      "path": "tests/execution-core-ownership.test.mjs",
+      "size": 2325,
+      "sha256": "b44b131a8806d15b78ae66f7886e289fd40f108fcc33592670e282b710184426"
+    },
+    {
+      "path": "tests/execution-core-probe.test.mjs",
+      "size": 4246,
+      "sha256": "ab2ba147d2838830379c8442eeee4854eca85017b66b911125860c96f4944dcd"
+    },
+    {
+      "path": "tests/execution-core-reconciliation.test.mjs",
+      "size": 1762,
+      "sha256": "fb907a5dae6a7aedea27d4d8ce3422bf8f54940fe6f6ffe634153a813f681b9f"
+    },
+    {
+      "path": "tests/execution-registry.test.mjs",
+      "size": 2687,
+      "sha256": "2f52b9f60fb9d465cd3bf6890c97ea1b8e8856d226023a64b913e3e7c5a9f581"
+    },
+    {
+      "path": "tests/execution.test.mjs",
+      "size": 19403,
+      "sha256": "0c21031b31e1da443cc544afee20f03f582deeb87c54fa4fbee8b4cd7efa9313"
+    },
+    {
+      "path": "tests/h100-direct.test.mjs",
+      "size": 44664,
+      "sha256": "89bfbd1c69c23149f425d3d862372ff1f707cd48b65549871c38e86b7537ddef"
+    },
+    {
+      "path": "tests/h100-mirror.test.mjs",
+      "size": 12896,
+      "sha256": "e6f0784815f49dfe80153f0884fe2791a15a0885b841986eaef8a2a046c22e50"
+    },
+    {
+      "path": "tests/h100-policy.test.mjs",
+      "size": 4182,
+      "sha256": "7d401ae21c6e897cbfe11dcf303e21ff9957aa691f28201e930692f354363ccc"
+    },
+    {
+      "path": "tests/hardening-regression.test.mjs",
+      "size": 2064,
+      "sha256": "23b1e2babd96950b47c2b4148516e9470d390c9711145ca05f68e533bb025607"
+    },
+    {
+      "path": "tests/inventory.test.mjs",
+      "size": 6616,
+      "sha256": "abdbfa2ca6b505f35345782fef8465e5ba05603a5d36bbbb51895252aa3db5fc"
+    },
+    {
+      "path": "tests/memory.test.mjs",
+      "size": 4804,
+      "sha256": "2ac4b939029b4c672451dbdda98f3bbdef955f1f28f488e22d9b04a551f7bd7d"
+    },
+    {
+      "path": "tests/policy.test.mjs",
+      "size": 3416,
+      "sha256": "ea24ddce5def712ac658b84c5372028c26f008671304f43aad50843541e8ef5b"
+    },
+    {
+      "path": "tests/project-core.test.mjs",
+      "size": 8098,
+      "sha256": "8051e8c3baeace232bad9c3777790115c7447744540e7525a3840881ef4920c5"
+    },
+    {
+      "path": "tests/project-source.test.mjs",
+      "size": 6176,
+      "sha256": "f03899f7363d5f6284c533e54c0dd1105825165175e360b52c4a8b3951354d51"
+    },
+    {
+      "path": "tests/project-status-tools.test.mjs",
+      "size": 4944,
+      "sha256": "43a08df113860f004bd0ab3a3e49c4178b73ac243a345c37e307566d02f7a8de"
+    },
+    {
+      "path": "tests/project-tools.test.mjs",
+      "size": 7036,
+      "sha256": "f944acad2eeaa57516ff9bdc6c062550f00b103d26dabd071ec59567f2ff1907"
+    },
+    {
+      "path": "tests/projection.test.mjs",
+      "size": 10634,
+      "sha256": "07445614656270990128b2a20ecdd4298072d98abb72c75947fcccae2466cefb"
+    },
+    {
+      "path": "tests/remote-access.test.mjs",
+      "size": 2668,
+      "sha256": "623252ce4bfe80102e733872a5d1debe43108289026a47f9e9b04e8f290f9e3b"
+    },
+    {
+      "path": "tests/run-evidence.test.mjs",
+      "size": 669,
+      "sha256": "80ee229b373de1908b34c6f1b75986e65376d99035fbcd60d03dc11fd0946b37"
+    },
+    {
+      "path": "tests/run-registry.test.mjs",
+      "size": 1785,
+      "sha256": "1cb01c5c3d06cda51034d99da95444f10e1e82bddf891da1034984c69a7e71fb"
+    },
+    {
+      "path": "tests/runtime-smoke.mjs",
+      "size": 5672,
+      "sha256": "439437e28d694d86dcf067d9212e595a33a197290d8367e00791ee9e4297d641"
+    },
+    {
+      "path": "tests/scheduler-evidence.test.mjs",
+      "size": 1500,
+      "sha256": "f5111696d4bbd3ec0d78de05c3959b0e2e996d063d1cc18711de46edb56098d9"
+    },
+    {
+      "path": "tests/secure-package.test.mjs",
+      "size": 2316,
+      "sha256": "9ed332e466f26fccbb491a234e7fcd1e55c574016070f973625b8ac19fb0de96"
+    },
+    {
+      "path": "tests/slurm-discovery.test.mjs",
+      "size": 1856,
+      "sha256": "720706995e26b7bd7055db4a2f7bee50e4146686b499fadd738f4ab02dc5448c"
+    },
+    {
+      "path": "tests/slurm-policy.test.mjs",
+      "size": 6065,
+      "sha256": "f8924c862f45a509c9042ca48c8ebc91881e1095a429171d49ab3d319238bc42"
+    },
+    {
+      "path": "tests/transfer.test.mjs",
+      "size": 5419,
+      "sha256": "23052edd25d8afa42495546eb847d2467e36417a67c613e2900db66d5890d896"
+    },
+    {
+      "path": "tests/workflow-execution.test.mjs",
+      "size": 6587,
+      "sha256": "c493285c77de424e3fd1d8645c5b5913a86f3d90b55a39c806511409ed399da4"
+    },
+    {
+      "path": "tests/workflow-registry.test.mjs",
+      "size": 9419,
+      "sha256": "cb1a1154eda8a194d5068575b50375a2ba8b861d5171900e379c2c02317f8699"
+    },
+    {
+      "path": "tests/workflow-tools.test.mjs",
+      "size": 9090,
+      "sha256": "92512b99d190926fd9e0f1566b4e5ed6822c9d077b18f6dab1070c162d075c96"
+    },
+    {
+      "path": "tests/workflow.test.mjs",
+      "size": 9820,
+      "sha256": "3b36da0623c8df52703c4155410c72ccaae0b2191b3cad57a08440872a5f8c75"
+    }
+  ]
+}

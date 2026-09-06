@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "codex-genbio-remote": {
+      "command": "/opt/homebrew/bin/node",
+      "args": [
+        "./server/bin/mcp-server.js"
+      ],
+      "cwd": ".",
+      "env": {
+        "GENBIO_CONFIG_PATH": "/Users/mdanh/.codex/codex-genbio-remote/config.yaml"
+      },
+      "startup_timeout_sec": 60
+    }
+  }
+}
