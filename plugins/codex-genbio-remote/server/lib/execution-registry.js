@@ -90,6 +90,7 @@ export function createExecutionRegistry(rootDir) {
       const index = records.findIndex((item) => item.runId === runId);
       if (index < 0) throw new Error(`unknown durable Genbio run ${runId}`);
       const before = records[index]; const candidate = normalizeRecord(mutate(structuredClone(before)));
+      if (candidate.target !== before.target || candidate.sessionId !== before.sessionId || candidate.workspace !== before.workspace) throw new Error("execution registry immutable ownership or target changed");
       if (candidate.runId !== before.runId || candidate.attemptId !== before.attemptId || candidate.token !== before.token || candidate.planHash !== before.planHash || candidate.policyHash !== before.policyHash) throw new Error("execution registry immutable identity changed");
       if (before.slurmJobId !== null && candidate.slurmJobId !== before.slurmJobId) throw new Error("execution registry slurmJobId is write-once");
       candidate.updatedAt = Date.now(); records[index] = normalizeRecord(candidate); return records[index];

@@ -167,6 +167,7 @@ export function createWorkflowRegistry(rootDir) {
     if (!recover) return records;
     const now = Date.now();
     for (const record of records) {
+      if (WORKFLOW_TERMINAL.has(record.status)) continue;
       let nodeChanged = false;
       for (const node of record.nodes) if (RESTART_TO_RECONCILING.has(node.status)) {
         node.status = "reconciling";

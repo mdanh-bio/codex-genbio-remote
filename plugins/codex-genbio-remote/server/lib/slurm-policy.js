@@ -148,7 +148,9 @@ export function validatePinnedSbatch(text, jobSpec, context = {}) {
   if (!SAFE_JOB_NAME_RE.test(jobName)) throw new Error("SBATCH policy: --job-name contains unsafe characters or is too long");
   const partition = required(options, "partition").value;
   const node = required(options, "nodelist").value;
-  const allowlist = context.policy?.targets?.HPC?.allowlist;
+  const target = context.target ?? "HPC";
+  if (!["HPC", "NHPC"].includes(target)) throw new Error("SBATCH policy: invalid target");
+  const allowlist = context.policy?.targets?.[target]?.allowlist;
   if (!allowlist || typeof allowlist !== "object") throw new Error("SBATCH policy: missing HPC allowlist in policy");
   const nodeEntry = allowlist[node];
   if (!nodeEntry || nodeEntry.partition !== partition) throw new Error(`SBATCH policy: node ${node} with partition ${partition} is not in the policy allowlist`);
@@ -157,7 +159,7 @@ export function validatePinnedSbatch(text, jobSpec, context = {}) {
   if (manifestNodes !== null) {
     if (!manifestNodes.includes(node)) throw new Error(`SBATCH policy: template node ${node} is not in the manifest's declared nodes [${manifestNodes.join(", ")}]`);
   } else {
-    const fallback = context.policy?.targets?.HPC?.test_gate?.real_submission;
+    const fallback = context.policy?.targets?.[target]?.test_gate?.real_submission;
     if (typeof fallback !== "string" || node !== fallback) throw new Error(`SBATCH policy: manifest omits node and template node ${node} does not match policy default ${fallback}`);
   }
   const nodesEntry = required(options, "nodes");
@@ -186,7 +188,7 @@ export function validatePinnedSbatch(text, jobSpec, context = {}) {
   if (gpus !== jobSpec.gpus) throw new Error(`SBATCH policy: template requests ${gpus} GPUs but manifest declares ${jobSpec.gpus}`);
   if (concurrency !== jobSpec.concurrency) throw new Error(`SBATCH policy: template concurrency is ${concurrency} but manifest declares ${jobSpec.concurrency}`);
   const envelope = context.envelope;
-  if (!envelope || envelope.target !== "HPC" || envelope.node !== node || envelope.partition !== partition) throw new Error(`SBATCH policy: session envelope does not match template node ${node}/${partition}`);
+  if (!envelope || envelope.target !== target || envelope.node !== node || envelope.partition !== partition) throw new Error(`SBATCH policy: session envelope does not match template node ${node}/${partition}`);
   if (cpus > envelope.maxCpus || gpus > envelope.maxGpus || concurrency > envelope.concurrency) throw new Error("SBATCH policy: parsed aggregate resources exceed the active session envelope");
   return Object.freeze({ jobName, partition, node, nodes, taskDirective: taskNames[0], ntasks, cpusPerTask, cpus, gpus, concurrency, output, error });
 }

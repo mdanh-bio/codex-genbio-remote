@@ -51,6 +51,7 @@ async function harness(t, target = "HPC") {
       if (mode === "empty-dispatch") return ok();
       return ok(direct ? "" : "12345\n");
     }
+    if (command.includes("printf 'IDENTITY=%s")) return ok(evidence(run));
     if (command.includes("--name=")) return ok(`12345|${run.uniqueJobName}`);
     return ok(evidence(run, mode === "bad-output" ? { CHECKSUM: "missing" } : {}));
   };
@@ -67,19 +68,39 @@ for (const target of ["HPC", "NHPC", "genbio_mdanh", "genbioh100"]) test(`${targ
   const run = await h.service.launch(h.state, h.args);
   assert.equal(run.status, "completed", run.error);
   assert.match(run.token, /^[a-f0-9]{32}$/u);
+  assert.match(run.uniqueJobName, /^test\.[a-f0-9]{8}$/u);
   assert.equal(run.terminalEvidence.checksumOk, true);
   assert.doesNotThrow(() => assertTerminalEvidence(run));
   assert.equal((await h.registry.find(run.runId)).allocationStatus, "terminal");
+  const persisted = (await h.owners.load(h.state.ownerHandle)).runs[0];
+  const registered = await h.registry.find(run.runId);
+  for (const key of ["sbatchIssued", "slurmState", "exitCode", "elapsed", "workloadEvidence", "finishedAt"]) {
+    assert.equal(run[key], registered[key], key);
+    assert.equal(persisted[key], registered[key], key);
+  }
+  assert.equal(run.sbatchIssued, ["HPC", "NHPC"].includes(target));
+  assert.equal(run.workloadEvidence, "smoke-evidence-verified");
+  if (["HPC", "NHPC"].includes(target)) {
+    assert.equal(run.slurmState, "COMPLETED");
+    assert.equal(run.exitCode, "0:0");
+    assert.equal(run.elapsed, "00:01");
+  }
   const stdout = run.stdout;
   await h.service.monitor(h.state, run);
   assert.equal(run.stdout, stdout);
   assert.equal(h.calls.filter((x) => x.command.includes("sbatch --parsable wrapper.sh") || x.command.includes("setsid /bin/bash")).length, 1);
+  const statusCall = h.calls.at(-1).command;
+  assert.doesNotMatch(statusCall, /\\\\nprintf|\\\\nif/);
+  if (["HPC", "NHPC"].includes(target)) assert.match(statusCall, /squeue -h -j [^ ]+ -o '[^']+' 2>\/dev\/null \|\| true/);
+  if (["HPC", "NHPC"].includes(target)) assert.match(statusCall, /sacct -X -n -j [^ ]+ .*2>\/dev\/null \|\| true/);
 });
 
 test("ambiguous submission survives restart, blocks another launch, and reconciles without replay", async (t) => {
   const h = await harness(t); h.mode("ambiguous");
   const run = await h.service.launch(h.state, h.args);
   assert.equal(run.status, "reconciling");
+  assert.equal(run.sbatchIssued, true);
+  assert.equal(run.workloadEvidence, "smoke-outcome-unresolved");
   await assert.rejects(h.service.launch(h.state, h.args), /durable active attempt/);
   const restartedOwners = createOwnerStore(h.root, h.root);
   const restored = await restartedOwners.load(h.state.ownerHandle);
@@ -89,6 +110,9 @@ test("ambiguous submission survives restart, blocks another launch, and reconcil
   h.state.runs.at(-1).slurmJobId = "12345";
   const final = await service.monitor(restored, restored.runs[0]);
   assert.equal(final.status, "completed", final.error);
+  assert.equal(final.sbatchIssued, true);
+  assert.equal(final.slurmState, "COMPLETED");
+  assert.equal(final.exitCode, "0:0");
   assert.equal(h.calls.filter((x) => x.command.includes("sbatch --parsable wrapper.sh")).length, 1);
 });
 
@@ -105,6 +129,9 @@ test("stage failure never dispatches; transport exit zero alone never completes"
   const run = await h.service.launch(h.state, h.args);
   assert.equal(run.status, "failed");
   assert.equal(run.terminalEvidence.dispatched, false);
+  assert.equal(run.sbatchIssued, false);
+  assert.equal(run.workloadEvidence, "smoke-not-dispatched");
+  assert.equal((await h.registry.find(run.runId)).workloadEvidence, "smoke-not-dispatched");
   assert.equal(h.calls.filter((x) => x.command.includes("sbatch --parsable wrapper.sh")).length, 0);
   assert.equal(classifySmoke(run, ok()).status, "reconciling");
 });

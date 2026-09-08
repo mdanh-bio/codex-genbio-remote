@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { buildOperationPlan, resolveRecipe } from "./project.js";
+import { buildOperationPlan, resolveRecipe, projectTarget } from "./project.js";
 import { createProjectSource } from "./project-source.js";
 import { createPackageSnapshot, removePackageSnapshot, securePackageInventory } from "./secure-package.js";
 import { buildPackageInventory } from "./inventory.js";
@@ -53,6 +53,13 @@ export function createProjectTools({ makeTool, requirePolicy, requireState, publ
   const projectsDir = projectSource.projectsDir;
   const loadFor = (project, exec) => projectSource.loadProject(project, exec);
   const stateForExec = async (exec) => typeof hydrateState === "function" ? hydrateState(exec) : requireState(exec);
+  function restoreDurableRun(state, durable) {
+    state.runs ??= [];
+    const target = projectTarget(durable);
+    if (!state.runs.some((run) => run.runId === durable.runId)) state.runs.push({ ...durable, target, operation: `project-${durable.project}-${durable.operation}` });
+    if (!allocationsOf(state).some((item) => item.durableRunId === durable.runId)) allocationsOf(state).push({ target, project: durable.project, operation: durable.operation, slurmJobId: durable.slurmJobId, status: durable.allocationStatus, cpus: durable.cpus, gpus: durable.gpus, concurrency: durable.concurrency, durableRunId: durable.runId });
+    if (!submissionsOf(state).some((item) => item.durableRunId === durable.runId)) submissionsOf(state).push({ target, project: durable.project, operation: durable.operation, slurmJobId: durable.slurmJobId, uniqueJobName: durable.uniqueJobName, status: "submitted", token: durable.token, durableRunId: durable.runId });
+  }
 
   const projectsTool = makeTool(
     "genbio_projects",
@@ -82,6 +89,7 @@ export function createProjectTools({ makeTool, requirePolicy, requireState, publ
       requirePolicy();
       const state = await stateForExec(exec);
       const loaded = await loadFor(String(args.project), exec);
+      const target = projectTarget(loaded.manifest);
       return { ok: true, status: { ...publicState(state), project: { ...describe(loaded.manifest), origin: loaded.origin.kind }, manifest_sha256: loaded.manifestSha } };
     },
   );
@@ -94,6 +102,7 @@ export function createProjectTools({ makeTool, requirePolicy, requireState, publ
       requirePolicy();
       const state = await stateForExec(exec);
       const loaded = await loadFor(String(args.project), exec);
+      const target = projectTarget(loaded.manifest);
       const inventory = await buildPackageInventory(loaded.manifest, loaded.manifestSha);
       return { ok: true, status: { ...publicState(state), inventory: { ...inventory, origin: loaded.origin.kind } } };
     },
@@ -108,10 +117,11 @@ export function createProjectTools({ makeTool, requirePolicy, requireState, publ
       const state = await stateForExec(exec);
       if (!state.policy?.hash) throw new Error("current policy hash is unavailable");
       const loaded = await loadFor(String(args.project), exec);
+      const target = projectTarget(loaded.manifest);
       if (loaded.manifest.schemaVersion !== 2) throw new Error(`${loaded.manifest.project}: declarative planning requires schema_version 2`);
       const resolution = resolveRecipe({ manifest: loaded.manifest, operation: String(args.operation), parameters: args.parameters ?? {}, policy, envelope: state.envelope });
       const jobSpec = loaded.manifest.jobs[String(args.operation)];
-      const validation = validatePinnedSbatch(resolution.sbatchText, jobSpec, { policy, envelope: state.envelope });
+      const validation = validatePinnedSbatch(resolution.sbatchText, jobSpec, { policy, envelope: state.envelope, target });
       const inventory = await securePackageInventory(loaded.manifest, loaded.manifestSha);
       const built = buildOperationPlan({ project: loaded.manifest.project, operation: String(args.operation), policyHash: state.policy.hash, manifestSha: loaded.manifestSha, packageSha: inventory.packageSha, resolution });
       const record = Object.freeze({
@@ -159,17 +169,18 @@ export function createProjectTools({ makeTool, requirePolicy, requireState, publ
       // policy generation (policyHash), or recipe resolution (bytesSha) changes
       // the hash → fail closed before any staging or submission.
       const loaded = await loadFor(project, exec);
+      const target = projectTarget(loaded.manifest);
       if (loaded.origin.kind !== record.origin || loaded.origin.workspace !== record.workspace || loaded.path !== record.manifestPath) throw new Error("project manifest source drift: the approved workspace/configured source changed; nothing is staged or submitted");
       if (loaded.manifest.schemaVersion !== 2) throw new Error(`${project}: execution requires a schema_version 2 recipe manifest`);
       const jobSpec = loaded.manifest.jobs[operation];
       if (!jobSpec?.recipe) throw new Error(`${project}: operation ${operation} is not a declarative recipe; nothing is staged or submitted`);
       const resolution = resolveRecipe({ manifest: loaded.manifest, operation, parameters: record.parameters ?? {}, policy, envelope: state.envelope });
-      validatePinnedSbatch(resolution.sbatchText, jobSpec, { policy, envelope: state.envelope });
+      validatePinnedSbatch(resolution.sbatchText, jobSpec, { policy, envelope: state.envelope, target });
       const inventory = await securePackageInventory(loaded.manifest, loaded.manifestSha);
       const built = buildOperationPlan({ project: loaded.manifest.project, operation, policyHash: state.policy.hash, manifestSha: loaded.manifestSha, packageSha: inventory.packageSha, resolution });
       if (built.planHash !== record.planHash) throw new Error(`plan hash drift: recomputed ${built.planHash} != approved ${record.planHash}; the manifest or policy changed after the plan was approved — nothing is staged or submitted`);
       // ── Require the HPC/gpus envelope ──
-      validateEnvelope(state, { cpus: jobSpec.cpus, gpus: jobSpec.gpus, concurrency: jobSpec.concurrency });
+      validateEnvelope(state, { cpus: jobSpec.cpus, gpus: jobSpec.gpus, concurrency: jobSpec.concurrency }, target);
       const wrapperBytes = Buffer.from(resolution.sbatchText, "utf8");
       const wrapperSha = resolution.bytesSha; // === sha256(wrapperBytes)
       const shortHash = loaded.manifestSha.slice(0, 12);
@@ -185,16 +196,18 @@ export function createProjectTools({ makeTool, requirePolicy, requireState, publ
       if (inFlight) throw new Error(`${project}: operation ${operation} already has an in-flight submission; wait for it to settle (or collect terminal evidence) before submitting again`);
       if (!unresolved) assertAggregateCapacity(state, { cpus: jobSpec.cpus, gpus: jobSpec.gpus, concurrency: jobSpec.concurrency });
       let durable = null;
-      if (executionRegistry && !unresolved) durable = (await executionRegistry.reserve({ sessionId: exec.agent.session.id, workspace: record.workspace ?? exec?.agent?.session?.header?.cwd, project, operation, planHash: record.planHash, manifestSha: loaded.manifestSha, packageSha: inventory.packageSha, wrapperSha, policyHash: state.policy.hash, remoteBase: loaded.manifest.remoteRoot, cpus: jobSpec.cpus, gpus: jobSpec.gpus, concurrency: jobSpec.concurrency, node: resolution.node, partition: resolution.partition, envelope: state.envelope })).record;
+      if (executionRegistry && !unresolved) durable = (await executionRegistry.reserve({ sessionId: exec.agent.session.id, workspace: record.workspace ?? exec?.agent?.session?.header?.cwd, target, project, operation, planHash: record.planHash, manifestSha: loaded.manifestSha, packageSha: inventory.packageSha, wrapperSha, policyHash: state.policy.hash, remoteBase: loaded.manifest.remoteRoot, cpus: jobSpec.cpus, gpus: jobSpec.gpus, concurrency: jobSpec.concurrency, node: resolution.node, partition: resolution.partition, envelope: state.envelope })).record;
       const token = durable?.token ?? randomBytes(16).toString("hex");
       const intent = { project, operation, templateSha: wrapperSha, token, uniqueJobName: null, status: "attempted", slurmJobId: null, submittedAt: durable?.createdAt ?? Date.now(), durableRunId: durable?.runId ?? null };
       const allocation = { slurmJobId: null, project, operation, cpus: jobSpec.cpus, gpus: jobSpec.gpus, concurrency: jobSpec.concurrency, status: "submitting", submittedAt: durable?.createdAt ?? Date.now(), source: durable ? "durable-admission" : "admission", durableRunId: durable?.runId ?? null };
       intent.allocation = allocation;
+      intent.target = target;
+      allocation.target = target;
       submissionsOf(state).push(intent);
       allocationsOf(state).push(allocation);
       // ── end atomic admission ──
       try {
-        await requireRemoteAccess("HPC", [{ root: loaded.manifest.remoteRoot, write: true }], exec, state);
+        await requireRemoteAccess(target, [{ root: loaded.manifest.remoteRoot, write: true }], exec, state);
       } catch (error) {
         allocation.status = "failed"; allocation.source = "remote access not granted";
         intent.status = "failed"; intent.note = "remote access not granted";
@@ -202,7 +215,7 @@ export function createProjectTools({ makeTool, requirePolicy, requireState, publ
         throw error;
       }
       const run = startTrackedJob({
-        jobs, exec, state, project, operation,
+        jobs, exec, state, project, operation, target,
         resources: { cpus: jobSpec.cpus, gpus: jobSpec.gpus, concurrency: jobSpec.concurrency },
         label: `HPC project ${project} ${operation}`,
         logMaxBytes: config.logMaxBytes,
@@ -212,7 +225,7 @@ export function createProjectTools({ makeTool, requirePolicy, requireState, publ
             snapshot = await createPackageSnapshot(loaded.manifest, loaded.manifestSha, record.plan.packageSha);
             const executionManifest = durable ? Object.freeze({ ...snapshot.manifest, remoteRoot: durable.remoteRunDir }) : snapshot.manifest;
             if (durable) {
-              const created = await runRemote("HPC", freshRunDirectoryCommand(durable.remoteBase, durable.remoteRunDir, "HPC"), runExec, 30000);
+              const created = await runRemote(target, freshRunDirectoryCommand(durable.remoteBase, durable.remoteRunDir, target), runExec, 30000);
               if (created.exitCode !== 0) throw new Error(`${project}: fresh remote attempt directory creation failed: ${created.stderr || created.stdout || created.exitCode}`);
             }
             await stageAndValidate({ manifest: executionManifest, exec: runExec, userQuestions, shell, runRemote, config, extraOwnPrefixes: ["genbio-recipes"] });
@@ -258,19 +271,28 @@ export function createProjectTools({ makeTool, requirePolicy, requireState, publ
       const project = String(args.project);
       const reconcile = args.reconcile !== false;
       if (!SAFE_NAME_RE.test(project)) throw new Error(`invalid project name: ${project}`);
-      const loaded = await loadFor(project, exec);
+      if (args.run_id === undefined && (args.job_id !== undefined || args.operation !== undefined) && executionRegistry) {
+        const matches = (await executionRegistry.list()).filter((run) => run.project === project && run.operation === String(args.operation) && run.slurmJobId === String(args.job_id) && run.sessionId === exec.agent.session.id);
+        if (matches.length !== 1) throw new Error("exact job recovery requires one unambiguous owned durable run");
+        return statusTool.execute({ project, run_id: matches[0].runId, reconcile }, exec);
+      }
+      const exact = args.run_id !== undefined && executionRegistry ? await executionRegistry.find(String(args.run_id)) : null;
+      if (args.run_id !== undefined && (!exact || exact.project !== project || exact.sessionId !== exec.agent.session.id)) throw new Error("run is not an owned durable run for project");
+      const loaded = exact ? { manifest: { project, target: projectTarget(exact), remoteRoot: exact.remoteRunDir }, origin: { kind: "durable" } } : await loadFor(project, exec);
+      const target = projectTarget(loaded.manifest);
       if (!reconcile && (args.job_id !== undefined || args.operation !== undefined)) throw new Error("reconcile=false supports durable run_id or project-local status only; exact job_id status always requires scheduler reconciliation");
       let reconciliationPending = false;
       if (args.run_id !== undefined) {
         if (!executionRegistry) throw new Error("durable execution registry is unavailable");
         const durable = await executionRegistry.find(String(args.run_id));
         if (!durable || durable.project !== project || durable.sessionId !== exec.agent.session.id) throw new Error(`run ${args.run_id} is not an owned durable run for ${project}`);
+        if (durable.target !== target) throw new Error("durable run target mismatch");
         let ownedDurable = durable;
         if (!ownedDurable.slurmJobId && ownedDurable.sbatchIssued && ownedDurable.uniqueJobName !== "pending") {
           reconciliationPending = true;
           if (reconcile) {
-            await requireRemoteAccess("HPC", [{ root: ownedDurable.remoteRunDir, write: false }], exec, state);
-            const reconciledJobId = await reconcileSubmission({ exec, runRemote, jobName: ownedDurable.uniqueJobName });
+            await requireRemoteAccess(target, [{ root: ownedDurable.remoteRunDir, write: false }], exec, state);
+            const reconciledJobId = await reconcileSubmission({ exec, runRemote, target, jobName: ownedDurable.uniqueJobName });
             if (reconciledJobId) {
               ownedDurable = await executionRegistry.update(ownedDurable.runId, (item) => ({ ...item, slurmJobId: reconciledJobId, workloadStatus: "submitted", allocationStatus: "nonterminal", workloadEvidence: "scheduler-reconciled-by-unique-name", note: null }));
               reconciliationPending = false;
@@ -278,11 +300,12 @@ export function createProjectTools({ makeTool, requirePolicy, requireState, publ
           }
         }
         if (ownedDurable.slurmJobId && reconcile) {
-          const run = state.runs.find((item) => item.runId === ownedDurable.runId) ?? { runId: ownedDurable.runId, target: "HPC", operation: `project-${project}-${ownedDurable.operation}`, slurmJobId: ownedDurable.slurmJobId, workloadStatus: ownedDurable.workloadStatus };
+          restoreDurableRun(state, ownedDurable);
+          const run = state.runs.find((item) => item.runId === ownedDurable.runId) ?? { runId: ownedDurable.runId, target, operation: `project-${project}-${ownedDurable.operation}`, slurmJobId: ownedDurable.slurmJobId, workloadStatus: ownedDurable.workloadStatus };
           if (!state.runs.includes(run)) state.runs.push(run);
           if (!submissionsOf(state).some((item) => item.slurmJobId === ownedDurable.slurmJobId)) submissionsOf(state).push({ project, operation: ownedDurable.operation, uniqueJobName: ownedDurable.uniqueJobName, slurmJobId: ownedDurable.slurmJobId, status: "submitted", token: ownedDurable.token });
           if (!allocationsOf(state).some((item) => item.slurmJobId === ownedDurable.slurmJobId)) allocationsOf(state).push({ project, operation: ownedDurable.operation, slurmJobId: ownedDurable.slurmJobId, status: ownedDurable.allocationStatus, cpus: ownedDurable.cpus, gpus: ownedDurable.gpus, concurrency: ownedDurable.concurrency });
-          await requireRemoteAccess("HPC", [{ root: ownedDurable.remoteRunDir, write: false }], exec, state);
+          await requireRemoteAccess(target, [{ root: ownedDurable.remoteRunDir, write: false }], exec, state);
           const result = await statusJob({ manifest: Object.freeze({ ...loaded.manifest, remoteRoot: ownedDurable.remoteRunDir }), jobId: ownedDurable.slurmJobId, state, exec, runRemote });
           if (result.scheduler.state === null) run.workloadEvidence = result.scheduler.evidence;
           await executionRegistry.update(ownedDurable.runId, (item) => ({ ...item, slurmState: result.scheduler.state, exitCode: result.scheduler.exitCode, elapsed: result.scheduler.elapsed, workloadStatus: run.workloadStatus, allocationStatus: ["completed", "failed", "cancelled", "evidence-incomplete"].includes(run.workloadStatus) ? "terminal" : item.allocationStatus, workloadEvidence: run.workloadEvidence, finishedAt: ["completed", "failed", "cancelled", "evidence-incomplete"].includes(run.workloadStatus) ? (item.finishedAt ?? Date.now()) : item.finishedAt }));
@@ -291,8 +314,8 @@ export function createProjectTools({ makeTool, requirePolicy, requireState, publ
         const jobId = String(args.job_id ?? "");
         const operation = String(args.operation ?? "");
         if (!SAFE_NAME_RE.test(operation) || !/^[0-9]{1,10}$/u.test(jobId)) throw new Error("project scheduler status requires a safe operation and exact numeric job_id");
-        if (!findOwnedOperationRun(state, project, operation, jobId)) throw new Error(`Slurm job ${jobId} is not a session-owned run for ${project}/${operation}`);
-        await requireRemoteAccess("HPC", [{ root: loaded.manifest.remoteRoot, write: false }], exec, state);
+        if (!findOwnedOperationRun(state, project, operation, jobId, target)) throw new Error(`Slurm job ${jobId} is not a session-owned run for ${project}/${operation}`);
+        await requireRemoteAccess(target, [{ root: loaded.manifest.remoteRoot, write: false }], exec, state);
         await statusJob({ manifest: loaded.manifest, jobId, state, exec, runRemote });
       }
       const plans = plansOf(state).filter((item) => item.plan.project === project).map((item) => ({ plan_hash: item.planHash, operation: item.plan.operation, status: item.status, created_at: item.createdAt, bytes_sha256: item.plan.bytesSha, origin: item.origin }));
@@ -312,11 +335,15 @@ export function createProjectTools({ makeTool, requirePolicy, requireState, publ
       const state = await stateForExec(exec);
       const project = String(args.project); const operation = String(args.operation); const jobId = String(args.job_id);
       if (!SAFE_NAME_RE.test(project) || !SAFE_NAME_RE.test(operation)) throw new Error("project cancellation requires safe project and operation names");
-      await loadFor(project, exec);
       if (!executionRegistry) throw new Error("durable execution registry is unavailable");
-      const durable = (await executionRegistry.list()).find((item) => item.project === project && item.operation === operation && item.slurmJobId === jobId && item.sessionId === exec.agent.session.id);
+      const matches = (await executionRegistry.list()).filter((item) => item.project === project && item.operation === operation && item.slurmJobId === jobId && item.sessionId === exec.agent.session.id);
+      if (matches.length !== 1) throw new Error("cancellation requires one unambiguous owned durable identity");
+      const durable = matches[0];
+      const target = projectTarget(durable);
       if (!durable?.uniqueJobName) throw new Error(`Slurm job ${jobId} has no owned durable identity for ${project}/${operation}`);
-      const cancellation = await cancelOwnedJob({ state, project, operation, jobId, exec, userQuestions, runRemote, expectedJobName: durable.uniqueJobName, beforeCancel: async () => executionRegistry.update(durable.runId, (item) => ({ ...item, allocationStatus: "cancel-requested", cancelRequestedAt: Date.now(), workloadEvidence: "scancel-dispatch-started" })) });
+      restoreDurableRun(state, durable);
+      await requireRemoteAccess(target, [{ root: durable.remoteRunDir, write: true }], exec, state);
+      const cancellation = await cancelOwnedJob({ state, project, operation, jobId, target: durable.target, exec, userQuestions, runRemote, expectedJobName: durable.uniqueJobName, beforeCancel: async () => executionRegistry.update(durable.runId, (item) => ({ ...item, allocationStatus: "cancel-requested", cancelRequestedAt: Date.now(), workloadEvidence: "scancel-dispatch-started" })) });
       return { ok: true, status: { ...publicState(state), cancellation } };
     },
   );
@@ -329,13 +356,16 @@ export function createProjectTools({ makeTool, requirePolicy, requireState, publ
       requirePolicy();
       const state = await stateForExec(exec);
       const loaded = await loadFor(String(args.project), exec);
+      const target = projectTarget(loaded.manifest);
       if (!executionRegistry) throw new Error("durable execution registry is unavailable");
       const durable = await executionRegistry.find(String(args.run_id));
       if (!durable || durable.project !== loaded.manifest.project || durable.sessionId !== exec.agent.session.id) throw new Error(`run ${args.run_id} is not an owned durable run for ${loaded.manifest.project}`);
-      await requireRemoteAccess("HPC", [{ root: durable.remoteRunDir, write: false }], exec, state);
+      if (durable.target !== target) throw new Error("durable run target mismatch");
+      if (durable.manifestSha !== loaded.manifestSha) throw new Error("manifest drift: current manifest does not match durable run; refusing recovery fetch");
+      await requireRemoteAccess(target, [{ root: durable.remoteRunDir, write: false }], exec, state);
       const fetchManifest = Object.freeze({ ...loaded.manifest, remoteRoot: durable.remoteRunDir, fetch: loaded.manifest.fetch ? Object.freeze({ ...loaded.manifest.fetch, dest: `${loaded.manifest.fetch.dest}/${durable.runId}` }) : null });
       const requested = Array.isArray(args.files) ? args.files.map(String) : [];
-      const run = startTrackedJob({ jobs, exec, state, project: loaded.manifest.project, operation: "fetch", resources: { cpus: 0, gpus: 0, concurrency: 1 }, label: `HPC project ${loaded.manifest.project} fetch`, logMaxBytes: config.logMaxBytes, runBody: async ({ exec: runExec }) => {
+      const run = startTrackedJob({ jobs, exec, state, target, project: loaded.manifest.project, operation: "fetch", resources: { cpus: 0, gpus: 0, concurrency: 1 }, label: `${target} project ${loaded.manifest.project} fetch`, logMaxBytes: config.logMaxBytes, runBody: async ({ exec: runExec }) => {
         const outcome = await fetchArtifacts({ manifest: fetchManifest, requested, exec: runExec, userQuestions, shell, runRemote, config });
         return { stdout: outcome.stdout, stderr: outcome.stderr, exitCode: 0 };
       } });

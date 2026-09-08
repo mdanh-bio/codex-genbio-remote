@@ -45,11 +45,37 @@ test("approval binds details and persists only exact positive responses", async 
       return { action: ["accept", "wrong-id", "string-true"].includes(mode) ? "accept" : mode, content: { approved: mode === "string-true" ? "true" : true, approval_id: mode === "wrong-id" ? "wrong" : request.requestedSchema.properties.approval_id.enum[0] } };
     } } };
     const adapter = createQuestionAdapter(server, { getContext: async () => ({ policy_hash: "a".repeat(64), target: "HPC", owner_handle: "owner" }), persist: async (receipt) => receipts.push(receipt), verify: async () => { verified++; } });
-    if (mode === "unavailable") await assert.rejects(adapter.ask({ questions }), /unavailable/);
+    if (mode === "unavailable") await assert.rejects(adapter.ask({ questions }), /MCP elicitation failed.*no elicitation/);
     else assert.deepEqual((await adapter.ask({ questions })).answers[0].selected, [mode === "accept" ? "Approve" : "Reject"]);
     assert.equal(receipts.length, mode === "accept" ? 1 : 0);
     assert.equal(verified, mode === "accept" ? 1 : 0);
   }
+});
+
+test("approval uses a bounded extended elicitation timeout and preserves abort wiring", async () => {
+  const questions = [{ id: "launch", header: "Launch", question: "Launch?", options: [{ label: "Approve", description: "Dispatch once" }, { label: "Reject", description: "No launch" }] }];
+  let requestOptions;
+  const server = { server: { elicitInput: async (_request, options) => {
+    requestOptions = options;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    return { action: "accept", content: { approved: true, approval_id: _request.requestedSchema.properties.approval_id.enum[0] } };
+  } } };
+  const controller = new AbortController();
+  const adapter = createQuestionAdapter(server, { getContext: async () => ({ policy_hash: "a".repeat(64) }) });
+  const result = await adapter.ask({ questions, signal: controller.signal });
+  assert.deepEqual(result.answers[0].selected, ["Approve"]);
+  assert.equal(requestOptions.timeout, 300000);
+  assert.equal(requestOptions.maxTotalTimeout, 300000);
+  assert.equal(requestOptions.signal, controller.signal);
+});
+
+test("approval timeout remains fail-closed and does not persist", async () => {
+  const questions = [{ id: "launch", question: "Launch?", options: [{ label: "Approve", description: "Dispatch once" }, { label: "Reject", description: "No launch" }] }];
+  const receipts = [];
+  const server = { server: { elicitInput: async () => { const error = new Error("Request timed out"); error.code = -1; throw error; } } };
+  const adapter = createQuestionAdapter(server, { persist: async (receipt) => receipts.push(receipt), elicitationTimeoutMs: 1000 });
+  await assert.rejects(adapter.ask({ questions }), /Request timed out/);
+  assert.deepEqual(receipts, []);
 });
 
 test("envelopes require H100 memory and honor NHPC and CPU-only hard caps", async () => {

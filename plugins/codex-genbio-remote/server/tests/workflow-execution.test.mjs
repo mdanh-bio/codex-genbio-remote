@@ -26,7 +26,7 @@ async function fixture(t) {
   return { root, workspace, configured, registryDir };
 }
 
-function harness(fx) {
+function harness(fx, { failure = false, terminal = "completed" } = {}) {
   const state = { policy: { hash: H }, envelope, runs: [], plans: [], workflowPlans: [] };
   const exec = { agent: { id: "wf", session: { id: "wf", header: { id: "wf", cwd: fx.workspace } } } };
   let submitCalls = 0;
@@ -37,6 +37,7 @@ function harness(fx) {
     return { status: { planned: { plan_hash: node.operationPlanHash } } };
   }};
   const projectExecuteTool = { async execute({ plan_hash }) {
+    if (failure) throw new Error("definite planning failure");
     submitCalls += 1;
     const wf = state.workflowPlans.at(-1);
     const node = wf.nodeRecords.find((item) => item.operationPlanHash === plan_hash);
@@ -46,7 +47,7 @@ function harness(fx) {
   }};
   const projectStatusTool = { async execute({ project, operation, job_id }) {
     const run = state.runs.find((item) => item.slurmJobId === job_id && item.operation === `project-${project}-${operation}`);
-    run.workloadStatus = "completed"; run.slurmStatus = "COMPLETED"; run.slurmExitCode = "0:0"; run.workloadEvidence = "scheduler-and-job-output";
+    run.workloadStatus = terminal; run.slurmStatus = terminal.toUpperCase(); run.slurmExitCode = "0:0"; run.workloadEvidence = "scheduler-and-job-output";
     return { ok: true };
   }};
   const tools = createWorkflowTools({
@@ -96,4 +97,27 @@ test("unknown workflow plan and drift fail before submission", async (t) => {
   await writeFile(join(fx.workspace, "genbio-workflows/pipeline.yml"), `schema_version: 2\nworkflow: pipeline\nnodes:\n  - {id: run, project: demo, operation: run, parameters: {}}\n`);
   await assert.rejects(h.tools.executeTool.execute({ plan_hash: planned.status.workflow_plan.workflow_plan_hash }, h.exec), /workflow plan drift/u);
   assert.equal(h.submitCalls(), 0);
+});
+
+for (const terminal of ["failed", "cancelled"]) test(`workflow ${terminal} blocks dependants and survives restart`, async (t) => {
+  const fx = await fixture(t), h = harness(fx, { terminal });
+  const planned = await h.tools.planTool.execute({ workflow: "pipeline" }, h.exec);
+  const started = await h.tools.executeTool.execute({ plan_hash: planned.status.workflow_plan.workflow_plan_hash }, h.exec);
+  const id = started.status.workflow_run.workflow_run_id;
+  if (terminal === "cancelled") await h.tools.cancelTool.execute({ workflow_run_id: id, node_id: "prepare" }, h.exec);
+  const done = await h.tools.statusTool.execute({ workflow_run_id: id }, h.exec);
+  assert.equal(done.status.workflow_run.status, terminal);
+  assert.equal(done.status.workflow_run.nodes[1].status, "skipped");
+  assert.equal((await createWorkflowRegistry(fx.registryDir).list("wf"))[0].status, terminal);
+  await h.tools.advanceTool.execute({ workflow_run_id: id }, h.exec);
+  assert.equal(h.submitCalls(), 1);
+});
+
+test("definite execution failure terminalizes workflow with blocked dependants", async (t) => {
+  const fx = await fixture(t), h = harness(fx, { failure: true });
+  const planned = await h.tools.planTool.execute({ workflow: "pipeline" }, h.exec);
+  await assert.rejects(h.tools.executeTool.execute({ plan_hash: planned.status.workflow_plan.workflow_plan_hash }, h.exec), /definite planning failure/u);
+  const record = (await createWorkflowRegistry(fx.registryDir).list("wf"))[0];
+  assert.equal(record.status, "failed");
+  assert.equal(record.nodes[1].status, "skipped");
 });

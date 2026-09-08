@@ -34,6 +34,7 @@ test("plugin MCP manifest fixes the plugin working directory and forwards config
   assert.equal(definition.env_vars, undefined);
   assert.equal(definition.env.GENBIO_CONFIG_PATH, "/Users/mdanh/.codex/codex-genbio-remote/config.yaml");
   assert.equal(definition.startup_timeout_sec, 60);
+  assert.equal(definition.tool_timeout_sec, 360);
 });
 
 test("configuration resolver uses an explicit path or the stable Codex home fallback", () => {
@@ -42,7 +43,7 @@ test("configuration resolver uses an explicit path or the stable Codex home fall
   assert.throws(() => resolveConfigPath({ GENBIO_CONFIG_PATH: "relative.yaml" }), /absolute bounded path/u);
 });
 
-test("STDIO entrypoint initializes from plugin cwd and exposes all 37 typed tools", async (t) => {
+test("STDIO entrypoint initializes from plugin cwd and exposes all 38 typed tools", async (t) => {
   const { configPath } = await fixture(t);
   const definition = pluginMcp.mcpServers["codex-genbio-remote"];
   const client = new Client({ name: "stdio-regression", version: "1.0.0" });
@@ -56,7 +57,11 @@ test("STDIO entrypoint initializes from plugin cwd and exposes all 37 typed tool
   await client.connect(transport);
   t.after(() => client.close());
   const listed = await client.listTools();
-  assert.equal(listed.tools.length, 37);
+  assert.equal(listed.tools.length, 38);
+  const reconcile = listed.tools.find((tool) => tool.name === "genbio_project_reconcile");
+  assert.ok(reconcile);
+  assert.deepEqual(reconcile.inputSchema.required.sort(), ["owner_handle", "project", "run_id"]);
+  assert.equal(reconcile.annotations.readOnlyHint, false);
   assert.ok(listed.tools.every((tool) => tool.name.startsWith("genbio_")));
 });
 

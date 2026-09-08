@@ -8,8 +8,8 @@ import { probeNodeHeadroom } from "../lib/execution-core.js";
 const TEST_NODE = "gpu04";
 const record = ({ state = "MIXED", cpuAlloc = 64, cpuTot = 192, cfgGpu = 8, allocGpu = 4, node = TEST_NODE } = {}) =>
   `NodeName=${node} CPUAlloc=${cpuAlloc} CPUTot=${cpuTot} State=${state} CfgTRES=cpu=${cpuTot},mem=515115M,billing=${cpuTot},gres/gpu=${cfgGpu} AllocTRES=cpu=${cpuAlloc},gres/gpu=${allocGpu}`;
-const probe = (stdout, { exitCode = 0, stderr = "", cpus = 4, gpus = 1, commands = [], node = TEST_NODE } = {}) =>
-  probeNodeHeadroom({ exec: {}, runRemote: async (_target, command) => { commands.push(command); return { stdout, stderr, exitCode }; }, cpus, gpus, node });
+const probe = (stdout, { exitCode = 0, stderr = "", cpus = 4, gpus = 1, commands = [], node = TEST_NODE, queue = stdout } = {}) =>
+  probeNodeHeadroom({ exec: {}, policy: { targets: { HPC: { allowlist: { gpu04: { caps: { max_concurrent_gpu_jobs: 4 } } } } } }, runRemote: async (_target, command) => { commands.push(command); return { stdout: command.includes("GPU_JOBS_BEGIN") ? queue : stdout, stderr, exitCode }; }, cpus, gpus, node });
 
 test("probe passes on usable short and long node states with sufficient headroom", async () => {
   for (const state of ["idle", "alloc", "allocated", "mix", "mixed", "MIXED"]) {
@@ -33,6 +33,20 @@ test("probe fails closed on insufficient headroom", async () => {
 test("mixed nodes without GPU allocation TRES fail closed", async () => {
   const liveStyle = record().replace("CfgTRES=cpu=192,mem=515115M,billing=192,gres/gpu=8", "Gres=gpu:rtx5000:8 CfgTRES=cpu=192,mem=515115M,billing=192").replace("AllocTRES=cpu=64,gres/gpu=4", "AllocTRES=cpu=64");
   await assert.rejects(probe(`NODE_PROBE=${liveStyle}\n`), /incomplete allocated-GPU evidence/u);
+});
+
+test("mixed nodes recover GPU allocation from exact active-job evidence", async () => {
+  const liveStyle = record().replace("CfgTRES=cpu=192,mem=515115M,billing=192,gres/gpu=8", "Gres=gpu:rtx5000:8 CfgTRES=cpu=192,mem=515115M,billing=192").replace("AllocTRES=cpu=64,gres/gpu=4", "AllocTRES=cpu=64");
+  const queue = `GPU_JOBS_BEGIN\n810|RUNNING|gpu04|8|cpu=8|gpu:1|N/A|N/A|N/A|\n811|RUNNING|gpu04|56|cpu=56|N/A|N/A|N/A|N/A|\nGPU_JOBS_END\nNODE_AFTER=${liveStyle}\nGPU_QUEUE_OK=1\n`;
+  const result = await probe(`NODE_PROBE=${liveStyle}\n`, { cpus: 8, gpus: 1, queue });
+  assert.equal(result.ok, true);
+  assert.equal(result.freeGpus, 7);
+});
+
+test("mixed nodes reject malformed active-job GPU evidence", async () => {
+  const liveStyle = record().replace("CfgTRES=cpu=192,mem=515115M,billing=192,gres/gpu=8", "Gres=gpu:rtx5000:8 CfgTRES=cpu=192,mem=515115M,billing=192").replace("AllocTRES=cpu=64,gres/gpu=4", "AllocTRES=cpu=64");
+  const queue = `GPU_JOBS_BEGIN\n810|RUNNING|gpu04|64|cpu=64|gpu:?|N/A|N/A|N/A|\nGPU_JOBS_END\nNODE_AFTER=${liveStyle}\nGPU_QUEUE_OK=1\n`;
+  await assert.rejects(probe(`NODE_PROBE=${liveStyle}\n`, { queue }), /unparseable GPU request/u);
 });
 
 test("probe fails closed on missing, wrong, or malformed node evidence", async () => {

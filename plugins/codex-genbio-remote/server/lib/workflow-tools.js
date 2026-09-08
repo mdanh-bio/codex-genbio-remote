@@ -47,6 +47,21 @@ function refreshReadiness(record, planRecord) {
   }
 }
 
+async function terminalizeWorkflow(workflowRegistry, sessionId, record) {
+  if (!record || ["completed", "failed", "cancelled"].includes(record.status)) return record;
+  const statuses = record.nodes.map((node) => node.status);
+  let status = null;
+  if (statuses.some((value) => value === "failed")) status = "failed";
+  else if (statuses.includes("cancelled") && !statuses.some((value) => ACTIVE_NODE.has(value))) status = "cancelled";
+  else if (statuses.length > 0 && statuses.every((value) => value === "completed")) status = "completed";
+  if (!status) return record;
+  if (record.nodes.some((node) => ACTIVE_NODE.has(node.status))) return record;
+  for (const node of record.nodes.filter((item) => !TERMINAL_NODE.has(item.status))) {
+    await workflowRegistry.updateNode(sessionId, record.workflowRunId, node.nodeId, { status: "skipped", evidence: "workflow-terminal-dependency-stop" });
+  }
+  return workflowRegistry.updateWorkflow(sessionId, record.workflowRunId, { status });
+}
+
 export function createWorkflowTools({ makeTool, requirePolicy, requireState, publicState, config, projectSource: suppliedProjectSource, projectPlanTool, projectExecuteTool, projectStatusTool, projectCancelTool, workflowRegistry }) {
   const projectSource = suppliedProjectSource ?? createProjectSource(config);
 
@@ -62,7 +77,7 @@ export function createWorkflowTools({ makeTool, requirePolicy, requireState, pub
       const jobSpec = loaded.manifest.jobs[operation];
       if (!jobSpec?.recipe) throw new Error(`${project}: workflow operation ${operation} must be a declarative recipe`);
       const resolution = resolveRecipe({ manifest: loaded.manifest, operation, parameters, policy, envelope: state.envelope });
-      validatePinnedSbatch(resolution.sbatchText, jobSpec, { policy, envelope: state.envelope });
+      validatePinnedSbatch(resolution.sbatchText, jobSpec, { policy, envelope: state.envelope, target: resolution.target });
       const inventory = await securePackageInventory(loaded.manifest, loaded.manifestSha);
       const built = buildOperationPlan({ project, operation, policyHash: state.policy.hash, manifestSha: loaded.manifestSha, packageSha: inventory.packageSha, resolution });
       nodeRecords.push({ nodeId, project, operation, parameters: clone(parameters), operationPlanHash: built.planHash, manifestPath: loaded.path, origin: loaded.origin.kind, workspace: loaded.origin.workspace });
@@ -84,6 +99,7 @@ export function createWorkflowTools({ makeTool, requirePolicy, requireState, pub
   });
 
   async function startOrAdvance(planRecord, exec, state, existing = null) {
+    if (existing && ["completed", "failed", "cancelled"].includes(existing.status)) return existing;
     if (!workflowRegistry || !projectPlanTool || !projectExecuteTool) throw new Error("workflow execution integration is unavailable; no operation was submitted");
     const fresh = await resolveWorkflowPlan(planRecord.plan.workflow, exec, state);
     if (fresh.plan.workflow_plan_hash !== planRecord.planHash || sha256(fresh.loadedWorkflow.text) !== planRecord.workflowSha || fresh.loadedWorkflow.path !== planRecord.workflowPath || fresh.loadedWorkflow.origin.kind !== planRecord.workflowOrigin || fresh.loadedWorkflow.origin.workspace !== planRecord.workspace) throw new Error("workflow plan drift: workflow, project, policy, parameters, or source changed; nothing was submitted");
@@ -109,6 +125,7 @@ export function createWorkflowTools({ makeTool, requirePolicy, requireState, pub
       await workflowRegistry.updateNode(sessionId, record.workflowRunId, ready.nodeId, { status: run.workloadStatus === "unknown" ? "reconciling" : "submitted", runId: durableRunId, slurmJobId: run.slurmJobId ?? null });
     } catch (error) {
       await workflowRegistry.updateNode(sessionId, record.workflowRunId, ready.nodeId, { status: "failed", evidence: "definite-pre-submission-failure" });
+      await terminalizeWorkflow(workflowRegistry, sessionId, await workflowRegistry.list(sessionId).then((items) => items.find((item) => item.workflowRunId === record.workflowRunId)));
       throw error;
     }
     if (record.status === "planned") await workflowRegistry.updateWorkflow(sessionId, record.workflowRunId, { status: "running" });
@@ -143,13 +160,14 @@ export function createWorkflowTools({ makeTool, requirePolicy, requireState, pub
       if (next !== node.status) await workflowRegistry.updateNode(sessionId, record.workflowRunId, node.nodeId, { status: next, runId: node.runId, slurmJobId: run.slurmJobId ?? node.slurmJobId, slurmState: run.slurmStatus ?? null, exitCode: run.slurmExitCode ?? null, evidence: run.workloadEvidence ?? null });
     }
     record = (await workflowRegistry.list(sessionId)).find((item) => item.workflowRunId === record.workflowRunId);
+    record = await terminalizeWorkflow(workflowRegistry, sessionId, record);
     refreshReadiness(record, planRecord);
     for (const node of record.nodes) {
       const persisted = (await workflowRegistry.list(sessionId)).find((item) => item.workflowRunId === record.workflowRunId)?.nodes.find((item) => item.nodeId === node.nodeId);
       if (node.status === "ready" && persisted?.status === "blocked") await workflowRegistry.updateNode(sessionId, record.workflowRunId, node.nodeId, { status: "ready" });
     }
     record = (await workflowRegistry.list(sessionId)).find((item) => item.workflowRunId === record.workflowRunId);
-    if (record.nodes.every((node) => node.status === "completed") && !["completed", "failed", "cancelled"].includes(record.status)) record = await workflowRegistry.updateWorkflow(sessionId, record.workflowRunId, { status: "completed" });
+    record = await terminalizeWorkflow(workflowRegistry, sessionId, record);
     return { ok: true, status: { ...publicState(state), workflow_run: workflowPublic(record, planRecord) } };
   });
 
