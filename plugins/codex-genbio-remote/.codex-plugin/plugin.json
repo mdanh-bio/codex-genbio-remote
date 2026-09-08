@@ -1,6 +1,6 @@
 {
   "name": "codex-genbio-remote",
-  "version": "0.4.1+codex.20260905154117",
+  "version": "0.4.1+codex.20260908041727",
   "description": "Policy-guided Genbio remote compute workflows for Codex.",
   "author": {
     "name": "mdanh-bio"

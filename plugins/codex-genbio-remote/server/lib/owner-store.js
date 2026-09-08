@@ -9,6 +9,7 @@ const MAX_BYTES = 4 * 1024 * 1024;
 export function createOwnerStore(dataRoot, workspaceRoot) {
   const root = join(dataRoot, "owners");
   const cache = new Map();
+  const pending = new Map();
   const fileFor = (handle) => join(root, `${handle}.json`);
   function validateHandle(handle) { if (!HANDLE_RE.test(handle ?? "")) throw new Error("owner_handle is invalid"); return handle; }
   function normalize(state) {
@@ -34,6 +35,17 @@ export function createOwnerStore(dataRoot, workspaceRoot) {
     if (Buffer.byteLength(text) > MAX_BYTES) throw new Error("owner state exceeds persistence limit");
     const state = normalize(JSON.parse(text)); cache.set(handle, state); return state;
   }
-  async function save(state) { state.updatedAt = Date.now(); await persist(normalize(state)); }
+  async function save(state) {
+    normalize(state);
+    const handle = state.ownerHandle;
+    const previous = pending.get(handle) ?? Promise.resolve();
+    const writing = previous.catch(() => {}).then(async () => {
+      state.updatedAt = Date.now();
+      await persist(state);
+    });
+    pending.set(handle, writing);
+    try { await writing; }
+    finally { if (pending.get(handle) === writing) pending.delete(handle); }
+  }
   return Object.freeze({ create, load, save, validateHandle });
 }

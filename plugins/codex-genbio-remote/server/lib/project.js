@@ -141,11 +141,19 @@ function parseRecipe(project, name, value, files) {
   return Object.freeze({ name: value.name, script: value.script, env: value.env ?? null, parameters: Object.freeze(parameters), argv });
 }
 
+export function projectTarget(manifest) {
+  const target = manifest?.target === undefined ? "HPC" : manifest.target;
+  if (!["HPC", "NHPC"].includes(target)) throw new Error("project target must be HPC or NHPC");
+  return target;
+}
+
 export function parseProjectManifest(project, parsed) {
   if (!plainObject(parsed)) throw new Error(`${project}: manifest must be a plain mapping`);
   const version = parsed.schema_version;
   if (version !== 2) throw new Error(`${project}: schema_version 2 is required; schema_version 1 is no longer supported`);
-  const topKeys = new Set(["schema_version", "project", "description", "local_root", "remote_root", "files", "extra_dirs", "jobs", "fetch"]);
+  const topKeys = new Set(["schema_version", "target", "project", "description", "local_root", "remote_root", "files", "extra_dirs", "jobs", "fetch"]);
+  const target = parsed.target === undefined ? "HPC" : parsed.target;
+  if (!["HPC", "NHPC"].includes(target)) throw new Error("project target must be HPC or NHPC");
   assertKeys(parsed, topKeys, `${project}: manifest`);
   if (typeof parsed.project !== "string" || !SAFE_NAME_RE.test(parsed.project) || parsed.project !== project) throw new Error(`${project}: project name must be kebab-case and match the manifest filename`);
   assertAbsolutePath(parsed.local_root, `${project}: local_root`);
@@ -164,7 +172,7 @@ export function parseProjectManifest(project, parsed) {
     if (spec.recipe === undefined) throw new Error(`${project}: job ${name} must define a declarative recipe; raw templates are no longer supported`);
     jobs[name] = Object.freeze({ recipe: parseRecipe(project, name, spec.recipe, files), ...resources });
   }
-  return Object.freeze({ schemaVersion: 2, project: parsed.project, localRoot: parsed.local_root, remoteRoot: parsed.remote_root, files, extraDirs, jobs: Object.freeze(jobs), fetch: parseFetch(project, parsed.fetch), description: typeof parsed.description === "string" ? parsed.description : "" });
+  return Object.freeze({ schemaVersion: 2, ...(parsed.target !== undefined ? { target } : {}), project: parsed.project, localRoot: parsed.local_root, remoteRoot: parsed.remote_root, files, extraDirs, jobs: Object.freeze(jobs), fetch: parseFetch(project, parsed.fetch), description: typeof parsed.description === "string" ? parsed.description : "" });
 }
 
 export function posixQuote(value) {
@@ -190,9 +198,9 @@ function resolveParameter(name, spec, supplied) {
   assertProjectRelativePath(value, `parameter ${name}`);
   return value;
 }
-function policyEnvironment(recipe, policy) {
+function policyEnvironment(recipe, policy, target) {
   if (!recipe.env) return [];
-  const profile = policy?.targets?.HPC?.environment?.recipe_envs?.[recipe.env];
+  const profile = policy?.targets?.[target]?.environment?.recipe_envs?.[recipe.env];
   if (!plainObject(profile)) throw new Error(`unknown policy recipe environment: ${recipe.env}`);
   assertKeys(profile, new Set(["source", "unset_u"]), `policy recipe environment ${recipe.env}`);
   if (!SAFE_ENV_SOURCE_RE.test(profile.source ?? "") || profile.source.includes("..")) throw new Error(`policy recipe environment ${recipe.env} has an unsafe source path`);
@@ -201,6 +209,9 @@ function policyEnvironment(recipe, policy) {
 }
 
 export function resolveRecipe({ manifest, operation, parameters = {}, policy, envelope }) {
+  const target = projectTarget(manifest);
+  if (!["HPC", "NHPC"].includes(target)) throw new Error("project target must be HPC or NHPC");
+  if (envelope?.target && envelope.target !== target) throw new Error("project target does not match owner envelope");
   if (!manifest || manifest.schemaVersion !== 2) throw new Error("recipe resolution requires a schema_version 2 manifest");
   const jobSpec = manifest.jobs?.[operation];
   if (!jobSpec?.recipe) throw new Error(`operation ${operation} is not a declarative recipe`);
@@ -210,8 +221,8 @@ export function resolveRecipe({ manifest, operation, parameters = {}, policy, en
   for (const [name, spec] of Object.entries(jobSpec.recipe.parameters)) values[name] = resolveParameter(name, spec, parameters);
   const args = jobSpec.recipe.argv.map((item) => Object.hasOwn(item, "literal") ? item.literal : values[item.param]);
   const invocation = [jobSpec.recipe.script, ...args].map(posixQuote).join(" ");
-  const selectedNode = selectJobNode(jobSpec, policy, envelope);
-  const partition = policy?.targets?.HPC?.allowlist?.[selectedNode]?.partition;
+  const selectedNode = selectJobNode(jobSpec, policy, envelope, target);
+  const partition = policy?.targets?.[target]?.allowlist?.[selectedNode]?.partition;
   if (!partition) throw new Error(`no policy allowlist entry for node ${selectedNode}`);
   const lines = [
     "#!/bin/bash",
@@ -227,19 +238,20 @@ export function resolveRecipe({ manifest, operation, parameters = {}, policy, en
     "set -euo pipefail",
     'cd "$SLURM_SUBMIT_DIR"',
     "printf 'DSH_SLURM_FRAME=START|%s|%s|%s|%s\\n' \"${SLURM_JOB_ID-}\" \"${SLURM_JOB_NAME-}\" \"${SLURM_JOB_NODELIST-}\" \"${CUDA_VISIBLE_DEVICES-}\"",
-    ...policyEnvironment(jobSpec.recipe, policy),
+    ...policyEnvironment(jobSpec.recipe, policy, target),
     invocation,
     "printf 'DSH_SLURM_FRAME=DONE|%s|%s\\n' \"${SLURM_JOB_ID-}\" \"${SLURM_JOB_NAME-}\"",
     "",
   ];
   const sbatchText = lines.join("\n");
   if (Buffer.byteLength(sbatchText) > MAX_COMPILED_BYTES) throw new Error(`compiled recipe exceeds ${MAX_COMPILED_BYTES} bytes`);
-  return Object.freeze({ sbatchText, bytesSha: sha256(sbatchText), jobName: jobSpec.recipe.name, cpus: jobSpec.cpus, gpus: jobSpec.gpus, concurrency: jobSpec.concurrency, node: selectedNode, partition, script: jobSpec.recipe.script, parameters: Object.freeze(values), envelope });
+  return Object.freeze({ target, sbatchText, bytesSha: sha256(sbatchText), jobName: jobSpec.recipe.name, cpus: jobSpec.cpus, gpus: jobSpec.gpus, concurrency: jobSpec.concurrency, node: selectedNode, partition, script: jobSpec.recipe.script, parameters: Object.freeze(values), envelope });
 }
 
-export function selectJobNode(jobSpec, policy, envelope) {
-  const allowlist = policy?.targets?.HPC?.allowlist;
-  if (!allowlist || !plainObject(allowlist)) throw new Error("policy missing HPC allowlist");
+export function selectJobNode(jobSpec, policy, envelope, target = "HPC") {
+  if (!["HPC", "NHPC"].includes(target)) throw new Error("project target must be HPC or NHPC");
+  const allowlist = policy?.targets?.[target]?.allowlist;
+  if (!allowlist || !plainObject(allowlist)) throw new Error("policy missing target allowlist");
   const candidates = jobSpec.nodes ?? null;
   if (candidates !== null) {
     for (const node of candidates) {
@@ -252,7 +264,7 @@ export function selectJobNode(jobSpec, policy, envelope) {
     if (envelope && envelope.node) throw new Error(`none of the manifest nodes [${candidates.join(", ")}] match the session envelope node ${envelope.node} with a valid policy allowlist entry`);
     throw new Error(`none of the manifest nodes [${candidates.join(", ")}] have a valid policy allowlist entry`);
   }
-  const fallback = policy?.targets?.HPC?.test_gate?.real_submission;
+  const fallback = policy?.targets?.[target]?.test_gate?.real_submission;
   if (typeof fallback !== "string" || !allowlist[fallback]) throw new Error("manifest omits node and policy test_gate.real_submission is not a valid allowlist entry");
   if (envelope && envelope.node && envelope.node !== fallback) throw new Error(`policy default node ${fallback} does not match session envelope node ${envelope.node}`);
   return fallback;
@@ -274,7 +286,9 @@ export function canonicalJson(value) { return JSON.stringify(canonicalValue(valu
 export function planHashOf(value) { return sha256(canonicalJson(value)); }
 export function buildOperationPlan({ project, operation, policyHash, manifestSha, packageSha, resolution }) {
   if (!/^[a-f0-9]{64}$/u.test(policyHash ?? "") || !/^[a-f0-9]{64}$/u.test(manifestSha ?? "") || !/^[a-f0-9]{64}$/u.test(packageSha ?? "")) throw new Error("plan requires full policy, manifest, and package SHA-256 values");
-  const plan = Object.freeze({ schema: "genbio-plan/2", target: "HPC", project, operation, policyHash, manifestSha, packageSha, bytesSha: resolution.bytesSha, jobName: resolution.jobName, cpus: resolution.cpus, gpus: resolution.gpus, concurrency: resolution.concurrency, node: resolution.node, partition: resolution.partition, script: resolution.script, parameters: resolution.parameters });
+  const target = resolution.target ?? "HPC";
+  if (!["HPC", "NHPC"].includes(target)) throw new Error("plan target must be HPC or NHPC");
+  const plan = Object.freeze({ schema: "genbio-plan/2", target, project, operation, policyHash, manifestSha, packageSha, bytesSha: resolution.bytesSha, jobName: resolution.jobName, cpus: resolution.cpus, gpus: resolution.gpus, concurrency: resolution.concurrency, node: resolution.node, partition: resolution.partition, script: resolution.script, parameters: resolution.parameters });
   return Object.freeze({ plan, planHash: planHashOf(plan) });
 }
 

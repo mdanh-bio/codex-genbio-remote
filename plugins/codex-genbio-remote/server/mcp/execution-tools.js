@@ -78,7 +78,7 @@ export function registerExecutionTools(server, context) {
     await owners.save(state);
     return state.remoteGrants;
   };
-  const execFor = (state) => ({ agent: { id: state.ownerHandle, session: { id: state.ownerHandle, header: { cwd: state.workspaceRoot } } }, signal: new AbortController().signal, __state: state });
+  const execFor = (state) => ({ agent: { id: state.ownerHandle, session: { id: state.ownerHandle, header: { cwd: state.workspaceRoot } } }, signal: new AbortController().signal, __state: state, saveState: () => owners.save(state) });
   const captured = new Map();
   const makeTool = (name, description, parameters, execute) => { const tool = { name, description, parameters, execute }; captured.set(name, tool); return tool; };
   createProjectTools({ makeTool, requirePolicy, requireState, publicState, config: context.config, runRemote, shell, userQuestions, jobs, requireRemoteAccess, projectSource, executionRegistry });
@@ -109,6 +109,11 @@ export function registerExecutionTools(server, context) {
   });
   wrappedTool(captured.get("genbio_project_plan"), { project: NAME, operation: NAME, parameters: z.record(z.string(), z.unknown()).optional() }, LOCAL_WRITE);
   wrappedTool(captured.get("genbio_project_execute"), { plan_hash: z.string().regex(/^[a-f0-9]{64}$/u) }, WRITE);
+  const projectStatus = captured.get("genbio_project_status");
+  wrappedTool({ name: "genbio_project_reconcile",
+    description: "Reconcile one exact owned project run using bounded scheduler and job-output evidence. Never submits or advances work.",
+    execute: (args, exec) => projectStatus.execute({ ...args, reconcile: true }, exec)
+  }, { project: NAME, run_id: z.string().min(1).max(192) }, WRITE);
   wrappedTool(captured.get("genbio_project_cancel"), { project: NAME, operation: NAME, job_id: z.string().regex(/^[0-9]{1,10}$/u) }, DESTRUCTIVE);
   wrappedTool(captured.get("genbio_project_fetch"), { project: NAME, run_id: z.string().min(1).max(192), files: z.array(z.string().min(1).max(1024)).max(64).optional() }, WRITE);
   const smoke = createSmokeService({ config: context.config, registry: executionRegistry, owners, runRemote, execFor, requireRemoteAccess, userQuestions, assertPolicy });

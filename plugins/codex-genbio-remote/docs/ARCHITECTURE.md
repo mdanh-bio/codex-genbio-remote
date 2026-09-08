@@ -4,8 +4,7 @@
 
 ### Codex plugin package
 
-The plugin manifest advertises bundled skills and, after the enforcement layer
-is implemented, a local STDIO MCP server.
+The plugin manifest advertises bundled skills and a local STDIO MCP server.
 
 ### Policy skill
 
@@ -19,7 +18,7 @@ The MCP server is the security boundary. It owns policy loading, schema
 validation, durable state, command construction, dispatch, reconciliation,
 monitoring, cancellation, transfer verification, and finalization.
 
-Proposed public tools:
+Public tools exposed by the current MCP server:
 
 - `genbio_policy_status`
 - `genbio_preflight`
@@ -32,6 +31,7 @@ Proposed public tools:
 - `genbio_project_status`
 - `genbio_project_cancel`
 - `genbio_project_fetch`
+- `genbio_project_reconcile`
 - `genbio_finalize_run`
 - `genbio_publish_run`
 

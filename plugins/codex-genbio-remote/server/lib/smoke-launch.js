@@ -73,6 +73,14 @@ export function createSmokeService({ config, registry, owners, runRemote, execFo
     run.workloadStatus = run.status;
     run.helperStatus = run.status;
     run.allocationStatus = terminal.has(run.status) ? "terminal" : "ambiguous";
+    run.sbatchIssued = slurm(run.target) && run.dispatchIssued === true;
+    run.slurmState = run.terminalEvidence?.scheduler?.state ?? null;
+    run.exitCode = run.terminalEvidence?.scheduler?.exitCode ?? null;
+    run.elapsed = run.terminalEvidence?.scheduler?.elapsed ?? null;
+    run.workloadEvidence = run.terminalEvidence?.phase === "pre-dispatch"
+      ? "smoke-not-dispatched"
+      : terminal.has(run.status) ? "smoke-evidence-verified" : "smoke-outcome-unresolved";
+    run.finishedAt = terminal.has(run.status) ? run.finishedAt ?? Date.now() : null;
     const existing = await registry.find(run.runId);
     if (existing?.allocationStatus === "terminal") {
       if (existing.workloadStatus !== run.status) throw new Error("terminal smoke record is immutable");
@@ -81,10 +89,9 @@ export function createSmokeService({ config, registry, owners, runRemote, execFo
     }
     await registry.update(run.runId, (old) => ({ ...old, status: run.status, helperStatus: run.status,
       workloadStatus: run.status, allocationStatus: terminal.has(run.status) ? "terminal" : "ambiguous",
-      slurmJobId: run.slurmJobId, slurmState: run.terminalEvidence?.scheduler?.state ?? null,
-      exitCode: run.terminalEvidence?.scheduler?.exitCode ?? null,
-      workloadEvidence: terminal.has(run.status) ? "smoke-evidence-verified" : "smoke-outcome-unresolved",
-      finishedAt: terminal.has(run.status) ? Date.now() : null }));
+      sbatchIssued: run.sbatchIssued, slurmJobId: run.slurmJobId,
+      slurmState: run.slurmState, exitCode: run.exitCode, elapsed: run.elapsed,
+      workloadEvidence: run.workloadEvidence, finishedAt: run.finishedAt }));
     await owners.save(state);
   }
   async function monitor(state, run) {
@@ -104,20 +111,11 @@ export function createSmokeService({ config, registry, owners, runRemote, execFo
         run.slurmJobId = [...ids][0];
         await sync(state, run);
       }
-      const account = slurm(run.target) ? `queue=$(squeue -h -j ${run.slurmJobId} -o '%i|%j|%T'); printf 'SQUEUE=%s\\n' "$queue"; account=$(sacct -X -n -j ${run.slurmJobId} --format=JobIDRaw,JobName%128,State,ExitCode,Elapsed -P); printf 'SACCT=%s\\n' "$account";` : "";
-      const out = await remote(state, run, `set -eu; cd -- ${q(run.remoteRunDir)}; ${account}
-printf 'IDENTITY=%s\\n' "$(cat identity 2>/dev/null || true)"
-printf 'EXIT=%s\\n' "$(cat exit_code 2>/dev/null || printf pending)"
-if test -f identity; then
-  IFS='|' read -r token pid start < identity
-  case "$pid" in ''|*[!0-9]*) exit 1;; esac
-  case "$start" in ''|*[!0-9]*) exit 1;; esac
-  live=$(awk '{print $3 "|" $22}' /proc/"$pid"/stat 2>/dev/null || true)
-  if test "$live" = "R|$start" || test "$live" = "S|$start" || test "$live" = "D|$start" || test "$live" = "T|$start"; then printf 'PROCESS=running\\n'; else printf 'PROCESS=exited\\n'; fi
-fi
-if test -s checksums.txt && sha256sum -c --quiet checksums.txt; then printf 'CHECKSUM=ok\\n'; else printf 'CHECKSUM=missing\\n'; fi
-printf 'WRAPPER_SHA=%s\\n' "$(sha256sum wrapper.sh | cut -d' ' -f1)"
-printf 'RESULT_SHA=%s\\n' "$(sha256sum result.txt 2>/dev/null | cut -d' ' -f1)"`);
+      const account = slurm(run.target) ? `queue=$(squeue -h -j ${run.slurmJobId} -o '%i|%j|%T' 2>/dev/null || true); printf 'SQUEUE=%s\\n' "$queue"; account=$(sacct -X -n -j ${run.slurmJobId} --format=JobIDRaw,JobName%128,State,ExitCode,Elapsed -P 2>/dev/null || true); if test -z "$account"; then account=$(sacct -X -n --name=${q(run.uniqueJobName)} --format=JobIDRaw,JobName%128,State,ExitCode,Elapsed -P 2>/dev/null || true); fi; printf 'SACCT=%s\\n' "$account";` : "";
+      // strictRemote transmits one JSON-quoted shell argument. Keep this
+      // status body on one line so command separators survive that encoding.
+      const statusBody = `set -eu; cd -- ${q(run.remoteRunDir)}; ${account} printf 'IDENTITY=%s\\n' "$(cat identity 2>/dev/null || true)"; printf 'EXIT=%s\\n' "$(cat exit_code 2>/dev/null || printf pending)"; if test -f identity; then IFS='|' read -r token pid start < identity; case "$pid" in ''|*[!0-9]*) exit 1;; esac; case "$start" in ''|*[!0-9]*) exit 1;; esac; live=$(awk '{print $3 "|" $22}' /proc/"$pid"/stat 2>/dev/null || true); if test "$live" = "R|$start" || test "$live" = "S|$start" || test "$live" = "D|$start" || test "$live" = "T|$start"; then printf 'PROCESS=running\\n'; else printf 'PROCESS=exited\\n'; fi; fi; if test -s checksums.txt && sha256sum -c --quiet checksums.txt; then printf 'CHECKSUM=ok\\n'; else printf 'CHECKSUM=missing\\n'; fi; printf 'WRAPPER_SHA=%s\\n' "$(sha256sum wrapper.sh | cut -d' ' -f1)"; printf 'RESULT_SHA=%s\\n' "$(sha256sum result.txt 2>/dev/null | cut -d' ' -f1)"`;
+      const out = await remote(state, run, statusBody);
       run.stdout = bounded(out.stdout, config.logMaxBytes); run.stderr = bounded(out.stderr, config.logMaxBytes);
       const evidence = classifySmoke(run, out);
       run.status = evidence.status;
@@ -145,7 +143,7 @@ printf 'RESULT_SHA=%s\\n' "$(sha256sum result.txt 2>/dev/null | cut -d' ' -f1)"`
     const { record } = await registry.reserve({ sessionId: state.ownerHandle, workspace: state.workspaceRoot, target: args.target, project: `smoke-${args.target.toLowerCase().replaceAll("_", "-")}`, operation: args.operation,
       planHash: specHash, manifestSha: specHash, packageSha: specHash, wrapperSha: specHash, policyHash: loaded.hash, remoteBase: root,
       cpus: args.cpus, gpus: args.gpus, concurrency: 1, node: e.node, partition: e.partition ?? "direct", envelope: e });
-    const run = { ...record, smokeSchema: 1, partition: e.partition ?? null, jobId: null, pid: null, policyHash: loaded.hash, resources: { cpus: args.cpus, gpus: args.gpus, memGb: args.mem_gb ?? null, concurrency: 1 }, envelope: structuredClone(e), startedAt: record.createdAt, stdout: "", stderr: "", error: null, finalization: null, memory: { status: "not-finalized" }, uniqueJobName: `genbio-smoke-${record.token}` };
+    const run = { ...record, smokeSchema: 1, partition: e.partition ?? null, jobId: null, pid: null, policyHash: loaded.hash, resources: { cpus: args.cpus, gpus: args.gpus, memGb: args.mem_gb ?? null, concurrency: 1 }, envelope: structuredClone(e), startedAt: record.createdAt, stdout: "", stderr: "", error: null, finalization: null, memory: { status: "not-finalized" }, uniqueJobName: `test.${record.token.slice(0, 8)}` };
     const wrapper = smokeWrapper(run); run.wrapperSha = sha(wrapper);
     state.runs.push(run);
     await registry.update(run.runId, (old) => ({ ...old, uniqueJobName: run.uniqueJobName, wrapperSha: run.wrapperSha }));
@@ -155,7 +153,7 @@ printf 'RESULT_SHA=%s\\n' "$(sha256sum result.txt 2>/dev/null | cut -d' ' -f1)"`
       const syntax = spawnSync("/bin/bash", ["--noprofile", "--norc", "-n"], { input: wrapper, encoding: "utf8" });
       if (syntax.status !== 0) throw new Error("fixed smoke wrapper fails local bash syntax");
       const probe = async () => {
-        if (slurm(args.target)) return probeNodeHeadroom({ exec: execFor(state), runRemote, cpus: args.cpus, gpus: args.gpus, node: e.node, target: args.target });
+        if (slurm(args.target)) return probeNodeHeadroom({ exec: execFor(state), runRemote, cpus: args.cpus, gpus: args.gpus, node: e.node, target: args.target, policy: loaded.policy });
         const out = await remote(state, run, "set -eu; printf 'CPUS=%s\\n' \"$(nproc)\"; awk '/MemAvailable:/ {printf \"MEM_KB=%s\\n\", $2}' /proc/meminfo");
         if (out.exitCode !== 0 || !/^[0-9]+$/u.test(field(out.stdout, "CPUS") ?? "") || !/^[0-9]+$/u.test(field(out.stdout, "MEM_KB") ?? "") || Number(field(out.stdout, "CPUS")) < args.cpus || Number(field(out.stdout, "MEM_KB")) < args.mem_gb * 1024 * 1024) throw new Error("direct headroom unavailable");
       };
@@ -167,6 +165,8 @@ printf 'RESULT_SHA=%s\\n' "$(sha256sum result.txt 2>/dev/null | cut -d' ' -f1)"`
       await assertPolicy(state);
       await registry.update(run.runId, (old) => ({ ...old, sbatchIssued: slurm(run.target), workloadEvidence: "dispatch-intent-persisted" }));
       run.status = "reconciling"; run.dispatchIssued = true;
+      run.sbatchIssued = slurm(run.target);
+      run.workloadEvidence = "dispatch-intent-persisted";
       await owners.save(state);
       dispatchIntent = true;
       const dispatch = slurm(run.target) ? "sbatch --parsable wrapper.sh" : "setsid /bin/bash --noprofile --norc wrapper.sh </dev/null >stdout.log 2>stderr.log &";
